@@ -466,6 +466,76 @@ func TestDecodeCMYK(t *testing.T) {
 	}
 }
 
+// TestDecodeAutoRotate verifies that the decoder correctly rotates the image based on the EXIF orientation tag.
+func TestDecodeAutoRotate(t *testing.T) {
+	// test420o.jpg is 384x512 and has EXIF orientation 6 (Rotate 90 CW).
+
+	imgRef, err := Decode(bytes.NewReader(test420o), &Options{ToRGBA: true, AutoRotate: false})
+	if err != nil {
+		t.Fatalf("Decode reference failed: %v", err)
+	}
+
+	boundsRef := imgRef.Bounds()
+	widthRef, heightRef := boundsRef.Dx(), boundsRef.Dy()
+
+	if widthRef != 384 || heightRef != 512 {
+		t.Fatalf("Reference image dimensions incorrect: got %dx%d, want 384x512", widthRef, heightRef)
+	}
+
+	imgRot, err := Decode(bytes.NewReader(test420o), &Options{AutoRotate: true})
+	if err != nil {
+		t.Fatalf("Decode with AutoRotate failed: %v", err)
+	}
+
+	boundsRot := imgRot.Bounds()
+	widthRot, heightRot := boundsRot.Dx(), boundsRot.Dy()
+
+	// Check if dimensions are swapped (Orientation 6 requires rotation).
+	if widthRot != heightRef || heightRot != widthRef {
+		t.Fatalf("Dimensions not swapped correctly. Ref: %dx%d, Rotated: %dx%d", widthRef, heightRef, widthRot, heightRot)
+	}
+
+	if _, ok := imgRot.(*image.RGBA); !ok {
+		t.Fatalf("AutoRotate did not return an RGBA image, but %T", imgRot)
+	}
+
+	// Compare pixel data to verify rotation (90 CW).
+	// Mapping for 90 CW (orientation 6): Original(sx, sy) -> Rotated(H_src-1-sy, sx)
+	// Where H_src is the height of the original image.
+
+	// Helper function to compare pixels, assuming RGBA input images.
+	comparePixels := func(sx, sy, dx, dy int) {
+		pRef := imgRef.At(sx, sy).(color.RGBA)
+		pRot := imgRot.At(dx, dy).(color.RGBA)
+
+		// The colors should match very closely as rotation is a direct memory copy after conversion.
+		if !isClose(pRef.R, pRot.R, defaultTolerance) ||
+			!isClose(pRef.G, pRot.G, defaultTolerance) ||
+			!isClose(pRef.B, pRot.B, defaultTolerance) {
+			t.Errorf("Pixel mismatch at Rotated(%d, %d). Got %v, want close to %v (from Ref (%d, %d))", dx, dy, pRot, pRef, sx, sy)
+		}
+	}
+
+	// Check corners:
+
+	// Original top-left (0, 0) -> New top-right (H-1, 0).
+	comparePixels(0, 0, heightRef-1, 0)
+
+	// Original top-right (W-1, 0) -> New bottom-right (H-1, W-1).
+	comparePixels(widthRef-1, 0, heightRef-1, widthRef-1)
+
+	// Original bottom-left (0, H-1) -> New top-left (0, 0).
+	comparePixels(0, heightRef-1, 0, 0)
+
+	// Original bottom-right (W-1, H-1) -> New bottom-left (0, W-1).
+	comparePixels(widthRef-1, heightRef-1, 0, widthRef-1)
+
+	// Check center pixel.
+	sx, sy := widthRef/2, heightRef/2
+	dx, dy := heightRef-1-sy, sx
+	comparePixels(sx, sy, dx, dy)
+}
+
 // BenchmarkDecode420 measures the performance of decoder.
 func BenchmarkDecode420(b *testing.B) {
 	b.ReportAllocs()

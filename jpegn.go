@@ -41,6 +41,10 @@ type Options struct {
 	// This option is only used when the output is RGBA (either because
 	// ToRGBA is true or the source JPEG is in the RGB format).
 	UpsampleMethod UpsampleMethod
+	// AutoRotate enables automatic image rotation based on the EXIF orientation tag.
+	// If true, the decoded image will be rotated/flipped to match the intended viewing orientation.
+	// This process forces the output to RGBA if a transformation is applied.
+	AutoRotate bool
 }
 
 // A reasonable upper limit for the size of JPEG headers.
@@ -110,16 +114,19 @@ func Decode(r io.Reader, opts ...*Options) (image.Image, error) {
 	// Initialize options.
 	d.toRGBA = false
 	d.upsampleMethod = NearestNeighbor
+	d.autoRotate = false
 
 	if len(opts) > 0 && opts[0] != nil {
 		d.upsampleMethod = opts[0].UpsampleMethod
 		d.toRGBA = opts[0].ToRGBA
+		d.autoRotate = opts[0].AutoRotate
 	}
 
 	img, err := d.decode(data, false)
 	if err != nil {
 		// If the format is unsupported, fall back to the standard library.
 		if errors.Is(err, ErrUnsupported) {
+			// Note: The standard library's jpeg.Decode does not auto-rotate based on EXIF.
 			return jpeg.Decode(bytes.NewReader(data))
 		}
 
@@ -130,6 +137,7 @@ func Decode(r io.Reader, opts ...*Options) (image.Image, error) {
 }
 
 // DecodeConfig returns the color model and dimensions of a JPEG image without decoding the entire image data.
+// The dimensions returned are as stored in the file (SOF marker), ignoring any EXIF orientation tags.
 func DecodeConfig(r io.Reader) (image.Config, error) {
 	// Get a buffer from the pool to avoid allocating a large slice on every call.
 	bufPtr := headerBufferPool.Get().(*[]byte)
@@ -154,6 +162,9 @@ func DecodeConfig(r io.Reader) (image.Config, error) {
 		d.reset()
 		decoderPool.Put(d)
 	}()
+
+	// We disable autorotation parsing for DecodeConfig as we only need the raw dimensions from SOF.
+	d.autoRotate = false
 
 	if _, err := d.decode(headerData[:n], true); err != nil {
 		if errors.Is(err, ErrUnsupported) {

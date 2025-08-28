@@ -47,6 +47,8 @@ type decoder struct {
 	isRGB             bool                      // True if the image is encoded as RGB instead of YCbCr.
 	upsampleMethod    UpsampleMethod            // The upsampling method to use.
 	toRGBA            bool                      // Whether to convert the final image to RGBA.
+	autoRotate        bool                      // Whether to auto-rotate based on EXIF orientation.
+	orientation       int                       // EXIF orientation tag (1-8).
 }
 
 // errDecode is used for internal panics during the hot decoding path.
@@ -269,6 +271,146 @@ func (d *decoder) skipMarker() error {
 
 // Marker Decoders
 
+// decodeAPP1 decodes the APP1 marker segment, typically containing EXIF metadata.
+// It specifically looks for the orientation tag if auto-rotation is enabled.
+func (d *decoder) decodeAPP1() error {
+	if err := d.decodeLength(); err != nil {
+		return err
+	}
+
+	// We only parse EXIF if auto-rotation is enabled.
+	if !d.autoRotate {
+		return d.skip(d.length)
+	}
+
+	// Check for "Exif\0\0" signature (6 bytes).
+	if d.length >= 6 &&
+		d.jpegData[d.pos+0] == 'E' &&
+		d.jpegData[d.pos+1] == 'x' &&
+		d.jpegData[d.pos+2] == 'i' &&
+		d.jpegData[d.pos+3] == 'f' &&
+		d.jpegData[d.pos+4] == 0 &&
+		d.jpegData[d.pos+5] == 0 {
+
+		// Start parsing TIFF header inside EXIF payload, starting after the 6-byte signature.
+		d.parseExif(6)
+	}
+
+	// Skip any remaining data in the segment.
+	// d.length is updated by d.skip() calls.
+	return d.skip(d.length)
+}
+
+// parseExif parses the TIFF header and IFD structure within the EXIF payload to find the orientation tag.
+// 'offset' is relative to the start of the APP1 payload (d.pos).
+func (d *decoder) parseExif(offset int) {
+	// Check if there is enough data for the TIFF header (8 bytes).
+	if d.length < offset+8 {
+		return
+	}
+
+	// TIFF Header starts at d.pos + offset.
+	tiffHeaderPos := d.pos + offset
+
+	// Check Byte order (MM or II).
+	var littleEndian bool
+	byteOrder := d.jpegData[tiffHeaderPos : tiffHeaderPos+2]
+
+	if byteOrder[0] == 0x49 && byteOrder[1] == 0x49 { // II (Intel)
+		littleEndian = true
+	} else if byteOrder[0] == 0x4D && byteOrder[1] == 0x4D { // MM (Motorola)
+		littleEndian = false
+	} else {
+		return // Invalid byte order marker.
+	}
+
+	// Helper functions for reading 16/32-bit integers based on endianness.
+	// These reads relative to the TIFF header start (tiffHeaderPos).
+	read16 := func(relOffset int) uint16 {
+		p := tiffHeaderPos + relOffset
+		if littleEndian {
+			return uint16(d.jpegData[p]) | (uint16(d.jpegData[p+1]) << 8)
+		}
+
+		return (uint16(d.jpegData[p]) << 8) | uint16(d.jpegData[p+1])
+	}
+
+	read32 := func(relOffset int) uint32 {
+		p := tiffHeaderPos + relOffset
+		if littleEndian {
+			return uint32(d.jpegData[p]) | (uint32(d.jpegData[p+1]) << 8) | (uint32(d.jpegData[p+2]) << 16) | (uint32(d.jpegData[p+3]) << 24)
+		}
+
+		return (uint32(d.jpegData[p]) << 24) | (uint32(d.jpegData[p+1]) << 16) | (uint32(d.jpegData[p+2]) << 8) | uint32(d.jpegData[p+3])
+	}
+
+	// Check the magic number (42) at offset 2.
+	if read16(2) != 42 {
+		return
+	}
+
+	// Read the offset to the first IFD (Image File Directory) at offset 4.
+	ifdOffset := read32(4)
+
+	// Basic validation of IFD offset.
+	if ifdOffset < 8 {
+		return
+	}
+
+	// Calculate the available data size starting from the TIFF header.
+	availableDataSize := d.length - offset
+
+	// Ensure the IFD offset is within the segment bounds.
+	if uint32(availableDataSize) < ifdOffset {
+		return
+	}
+
+	// Read the number of entries in the IFD (2 bytes).
+	if uint32(availableDataSize) < ifdOffset+2 {
+		return
+	}
+	numEntries := read16(int(ifdOffset))
+
+	// IFD entries are 12 bytes long. Check if all entries fit within the segment.
+	// If not, we truncate the number of entries we read (robustness against corrupted files).
+	requiredSize := ifdOffset + 2 + uint32(numEntries)*12
+	if uint32(availableDataSize) < requiredSize {
+		maxEntries := (uint32(availableDataSize) - ifdOffset - 2) / 12
+		numEntries = uint16(maxEntries)
+	}
+
+	// Iterate through IFD entries to find the Orientation tag (0x0112).
+	entryOffset := int(ifdOffset) + 2
+	const orientationTag = 0x0112
+
+	for i := 0; i < int(numEntries); i++ {
+		tag := read16(entryOffset)
+		if tag == orientationTag {
+			// Check format (Type 3 = SHORT, 2 bytes).
+			format := read16(entryOffset + 2)
+			if format != 3 {
+				break // Invalid format for Orientation
+			}
+
+			// Check count (must be 1).
+			count := read32(entryOffset + 4)
+			if count != 1 {
+				break // Invalid count for Orientation
+			}
+
+			// Read the orientation value (stored in the first 2 bytes of the offset field).
+			orientation := read16(entryOffset + 8)
+			if orientation >= 1 && orientation <= 8 {
+				d.orientation = int(orientation)
+			}
+
+			break // Found it, stop searching.
+		}
+
+		entryOffset += 12
+	}
+}
+
 // decodeAPP14 decodes the APP14 "Adobe" marker segment, which specifies the color space transformation.
 func (d *decoder) decodeAPP14() error {
 	if err := d.decodeLength(); err != nil {
@@ -441,8 +583,9 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 		}
 	}
 
-	if !configOnly && (d.toRGBA || d.isRGB) {
-		// Only allocate the final RGBA buffer if we are actually going to use it.
+	// Allocate the final RGBA buffer if we know we will need it (ToRGBA, source is RGB),
+	// or if AutoRotate is enabled (as rotation requires an RGBA buffer).
+	if !configOnly && (d.toRGBA || d.isRGB || d.autoRotate) {
 		rgbaSize := d.width * d.height * 4
 		if rgbaSize <= 0 && (d.width > 0 && d.height > 0) {
 			return ErrOutOfMemory
@@ -918,12 +1061,72 @@ func (d *decoder) convert() error {
 	return nil
 }
 
+// transform applies rotation and flipping to the decoded RGBA image based on the EXIF orientation tag.
+func (d *decoder) transform() {
+	srcWidth, srcHeight := d.width, d.height
+	src := d.pixels
+	srcStride := srcWidth * 4
+
+	dstWidth, dstHeight := srcWidth, srcHeight
+
+	// Orientations 5-8 involve 90/270 degree rotations, swapping width and height.
+	if d.orientation >= 5 {
+		dstWidth, dstHeight = srcHeight, srcWidth
+	}
+
+	// Allocate a new buffer for the transformed image.
+	// While some transformations (e.g., 180 rotation) can be done in-place,
+	// rotations require a separate buffer if W!=H. For simplicity, we always use a new buffer.
+	dst := make([]byte, dstWidth*dstHeight*4)
+	dstStride := dstWidth * 4
+
+	// Iterate over the source image dimensions (forward mapping).
+	for sy := 0; sy < srcHeight; sy++ {
+		for sx := 0; sx < srcWidth; sx++ {
+			var dx, dy int
+
+			// Map source coordinates (sx, sy) to destination coordinates (dx, dy).
+			switch d.orientation {
+			case 2: // Flip horizontal
+				dx, dy = srcWidth-1-sx, sy
+			case 3: // Rotate 180
+				dx, dy = srcWidth-1-sx, srcHeight-1-sy
+			case 4: // Flip vertical
+				dx, dy = sx, srcHeight-1-sy
+			case 5: // Transpose (Flip along TL-BR diagonal)
+				dx, dy = sy, sx
+			case 6: // Rotate 90 CW
+				dx, dy = srcHeight-1-sy, sx
+			case 7: // Transverse (Flip along TR-BL diagonal)
+				dx, dy = srcHeight-1-sy, srcWidth-1-sx
+			case 8: // Rotate 270 CW (90 CCW)
+				dx, dy = sy, srcWidth-1-sx
+			default:
+				// Should not happen as we check orientation > 1 before calling transform.
+				continue
+			}
+
+			srcOffset := sy*srcStride + sx*4
+			dstOffset := dy*dstStride + dx*4
+
+			// Copy RGBA pixel (4 bytes).
+			copy(dst[dstOffset:dstOffset+4], src[srcOffset:srcOffset+4])
+		}
+	}
+
+	// Update decoder state with the transformed image.
+	d.pixels = dst
+	d.width = dstWidth
+	d.height = dstHeight
+}
+
 // decode reads the JPEG stream from a byte slice, parses all segments, decodes the scan data, and performs color conversion.
 // If configOnly is true, it stops after reading the image metadata (SOF marker).
 func (d *decoder) decode(jpegData []byte, configOnly bool) (image.Image, error) {
 	d.jpegData = jpegData
 	d.pos = 0
 	d.size = len(jpegData)
+	d.orientation = 1 // Default orientation (Top-Left)
 
 	// Check for SOI (Start of Image) marker.
 	if d.size < 2 || d.jpegData[0] != 0xFF || d.jpegData[1] != 0xD8 {
@@ -998,7 +1201,12 @@ markerLoop:
 			break markerLoop
 		default:
 			if marker >= 0xE0 && marker <= 0xEF { // APPn markers
-				if marker == 0xEE { // APP14 (Adobe)
+				if marker == 0xE1 { // APP1 (EXIF)
+					if err := d.decodeAPP1(); err != nil {
+						// Errors in APP1 structure (e.g., bad length) are fatal.
+						return nil, err
+					}
+				} else if marker == 0xEE { // APP14 (Adobe)
 					if err := d.decodeAPP14(); err != nil {
 						return nil, err
 					}
@@ -1024,11 +1232,27 @@ markerLoop:
 		return nil, nil // Success for config-only path.
 	}
 
-	// If RGBA conversion is requested, or if the source is a rare RGB JPEG
-	// (which has no raw planar type in the standard library), perform the conversion.
-	if d.toRGBA || d.isRGB {
+	// Determine if we need to convert to RGBA.
+	// This is needed if requested (toRGBA), if the source is RGB, or if we need to rotate (autoRotate && orientation > 1).
+	needsRotation := d.autoRotate && d.orientation > 1
+	needsRGBA := d.toRGBA || d.isRGB || needsRotation
+
+	if needsRGBA {
+		// Ensure the RGBA buffer (d.pixels) is allocated. It should have been allocated in decodeSOF
+		// if (d.toRGBA || d.isRGB || d.autoRotate) was true.
+		if d.pixels == nil && (d.width > 0 && d.height > 0) {
+			// This case should theoretically not happen with the current logic.
+			return nil, ErrInternal
+		}
+
 		if err := d.convert(); err != nil {
 			return nil, err
+		}
+
+		// Apply rotation/flip if needed.
+		if needsRotation {
+			// This updates d.pixels, d.width, and d.height.
+			d.transform()
 		}
 
 		return &image.RGBA{
@@ -1038,6 +1262,7 @@ markerLoop:
 		}, nil
 	}
 
+	// Native YCbCr/Gray output (no rotation applied)
 	rect := image.Rect(0, 0, d.width, d.height)
 	switch d.ncomp {
 	case 1:

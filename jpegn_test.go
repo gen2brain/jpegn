@@ -35,7 +35,6 @@ func addFuzzCorpus(f *testing.F) {
 func FuzzDecode(f *testing.F) {
 	addFuzzCorpus(f)
 
-	// Define options to test different code paths.
 	optsNN := &Options{ToRGBA: true, UpsampleMethod: NearestNeighbor}
 	optsCR := &Options{ToRGBA: true, UpsampleMethod: CatmullRom}
 
