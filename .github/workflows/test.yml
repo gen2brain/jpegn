@@ -17,5 +17,7 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: ${{ matrix.go-version }}
-    - name: Test
+    - name: Test assembly
       run: go test
+    - name: Test generic
+      run: go test -tags noasm
