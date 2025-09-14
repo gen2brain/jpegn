@@ -12,8 +12,7 @@
 // 4.  T2 (Transpose 2): Transpose the intermediate results back (Array of Structures format).
 // 5.  P2 (Pass 2): Apply the 1D IDCT logic (AoS).
 // 6.  Pack, Clip, Reorder & Store: The results from P2 are in row-major order.
-//     The packing stage clips values to the [0, 255] range, reorders the rows
-//     within the YMM registers, and stores the final 8x8 byte block.
+//     The packing stage clips values to the [0, 255] range, reorders the rows within the YMM registers, and stores the final 8x8 byte block.
 
 // Macro to define a 256-bit YMM constant by broadcasting a 32-bit value.
 #define CONST_YMM(name, val) \
@@ -167,7 +166,7 @@ TEXT ·idctAVX2(SB), NOSPLIT, $16-48
 	VPSUBD Y11, Y6, Y4  // Y4 = x8-x6
 	VPSUBD Y15, Y8, Y5  // Y5 = x0-x4 (This overwrites original Y5)
 	VPSUBD Y9, Y7, Y6   // Y6 = x3-x2
-	VPSUBD Y10, Y12, Y7 // <<< FIX: Y7 = x7-x1 (use saved Y12)
+	VPSUBD Y10, Y12, Y7 // Y7 = x7-x1 (use saved Y12)
 
 	// Shift all results (>> 8).
 	VPSRAD $8, Y0, Y0
