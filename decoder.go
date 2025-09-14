@@ -45,6 +45,8 @@ type decoder struct {
 	pixels            []byte                    // Final decoded pixel data.
 	subsampleRatio    image.YCbCrSubsampleRatio // The detected YCbCr subsampling ratio.
 	isRGB             bool                      // True if the image is encoded as RGB instead of YCbCr.
+	isBaseline        bool                      // True if the image is a baseline JPEG.
+	isProgressive     bool                      // True if the image is a progressive JPEG.
 	upsampleMethod    UpsampleMethod            // The upsampling method to use.
 	toRGBA            bool                      // Whether to convert the final image to RGBA.
 	autoRotate        bool                      // Whether to auto-rotate based on EXIF orientation.
@@ -1156,6 +1158,7 @@ markerLoop:
 
 		switch marker {
 		case 0xC0: // SOF0 (Start of Frame, Baseline DCT)
+			d.isBaseline = true
 			if err := d.decodeSOF(configOnly); err != nil {
 				return nil, err
 			}
@@ -1164,6 +1167,9 @@ markerLoop:
 			if configOnly {
 				break markerLoop // Found config, we are done.
 			}
+		case 0xC2: // SOF2 (Start of Frame, Progressive DCT)
+			d.isProgressive = true
+			return nil, ErrUnsupported // This decoder does not support progressive JPEGs.
 		case 0xC4: // DHT (Define Huffman Table)
 			if err := d.decodeDHT(); err != nil {
 				return nil, err
@@ -1218,7 +1224,7 @@ markerLoop:
 			} else if marker >= 0xD0 && marker <= 0xD7 {
 				// RSTn (Restart markers). Should be handled within the scan, but we ignore them here.
 			} else {
-				// Unsupported markers include SOF2 (0xC2) for progressive JPEGs.
+				// Unsupported markers
 				return nil, ErrUnsupported
 			}
 		}
