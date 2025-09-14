@@ -1,4 +1,4 @@
-//go:build !amd64 || noasm
+//go:build (!amd64 && !arm64) || noasm
 
 package jpegn
 
