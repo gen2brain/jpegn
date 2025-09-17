@@ -11,8 +11,23 @@ func isEqual(t *testing.T, got, want []byte, context string) {
 
 	if !bytes.Equal(got, want) {
 		t.Errorf("%s: pixel data mismatch", context)
-		t.Logf("Got:  %v", got)
-		t.Logf("Want: %v", want)
+		if len(got) != len(want) {
+			t.Fatalf("Length mismatch: got %d, want %d", len(got), len(want))
+		}
+
+		// Find the first differing byte to give a more helpful error.
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("First difference at index %d: got %d, want %d", i, got[i], want[i])
+				// Stop after the first difference to avoid spamming logs.
+				// For a full debug, uncomment the Logf lines below.
+				return
+			}
+		}
+
+		// Uncomment for full dump on failure
+		// t.Logf("Got:  %v", got)
+		// t.Logf("Want: %v", want)
 	}
 }
 
@@ -98,6 +113,89 @@ func TestUpsampleNearestNeighbor(t *testing.T) {
 			}
 
 			isEqual(t, c.pixels, tt.expectedP, tt.name)
+		})
+	}
+}
+
+// TestUpsampleNearestNeighborAssembly validates the assembly implementation against the generic Go implementation
+// across various dimensions to catch boundary and pointer bugs.
+func TestUpsampleNearestNeighborAssembly(t *testing.T) {
+	testCases := []struct {
+		name     string
+		initialW int
+		initialH int
+		initialS int // Stride
+	}{
+		{
+			name:     "Original failing case",
+			initialW: 19,
+			initialH: 5,
+			initialS: 24, // Stride > width
+		},
+		{
+			name:     "SIMD aligned width",
+			initialW: 32, // Multiple of 16
+			initialH: 4,
+			initialS: 32, // Stride == width
+		},
+		{
+			name:     "Scalar only width",
+			initialW: 7, // Less than 16
+			initialH: 3,
+			initialS: 10,
+		},
+		{
+			name:     "Large non-aligned image",
+			initialW: 131,
+			initialH: 67,
+			initialS: 140,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			targetW := tc.initialW * 2
+			targetH := tc.initialH * 2
+
+			// Create initial pixel data with a predictable pattern.
+			initialP := make([]byte, tc.initialH*tc.initialS)
+			for y := 0; y < tc.initialH; y++ {
+				for x := 0; x < tc.initialW; x++ {
+					initialP[y*tc.initialS+x] = byte((y*tc.initialW + x) % 256)
+				}
+			}
+
+			// Create two identical components to work on.
+			cAsm := &component{
+				width:  tc.initialW,
+				height: tc.initialH,
+				pixels: append([]byte(nil), initialP...),
+				stride: tc.initialS,
+			}
+
+			cGeneric := &component{
+				width:  tc.initialW,
+				height: tc.initialH,
+				pixels: append([]byte(nil), initialP...),
+				stride: tc.initialS,
+			}
+
+			// Run both the assembly-optimized and generic versions.
+			upsampleNearestNeighbor(cAsm, targetW, targetH)
+			upsampleNearestNeighborGeneric(cGeneric, targetW, targetH)
+
+			// The results must be identical.
+			if cAsm.width != cGeneric.width || cAsm.height != cGeneric.height {
+				t.Errorf("Dimension mismatch: ASM is %dx%d, Generic is %dx%d",
+					cAsm.width, cAsm.height, cGeneric.width, cGeneric.height)
+			}
+
+			if cAsm.stride != cGeneric.stride {
+				t.Errorf("Stride mismatch: ASM is %d, Generic is %d", cAsm.stride, cGeneric.stride)
+			}
+
+			context := "Assembly vs Generic"
+			isEqual(t, cAsm.pixels, cGeneric.pixels, context)
 		})
 	}
 }
