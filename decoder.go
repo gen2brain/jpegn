@@ -1604,67 +1604,14 @@ func (d *decoder) convert() error {
 	if d.ncomp == 3 {
 		if d.isRGB {
 			// RGB to RGBA conversion
-			rgbaOffset := 0
-			pr, pg, pb := 0, 0, 0
-
-			for yy := 0; yy < d.height; yy++ {
-				for x := 0; x < d.width; x++ {
-					d.pixels[rgbaOffset] = d.comp[0].pixels[pr+x]   // R
-					d.pixels[rgbaOffset+1] = d.comp[1].pixels[pg+x] // G
-					d.pixels[rgbaOffset+2] = d.comp[2].pixels[pb+x] // B
-					d.pixels[rgbaOffset+3] = 255                    // A
-					rgbaOffset += 4
-				}
-
-				pr += d.comp[0].stride
-				pg += d.comp[1].stride
-				pb += d.comp[2].stride
-			}
+			rgbToRGBA(&d.comp[0], &d.comp[1], &d.comp[2], d.pixels, d.width, d.height)
 		} else {
 			// YCbCr to RGBA conversion
-			rgbaOffset := 0
-			py, pcb, pcr := 0, 0, 0
-
-			for yy := 0; yy < d.height; yy++ {
-				for x := 0; x < d.width; x++ {
-					y := int32(d.comp[0].pixels[py+x]) << 8
-					cb := int32(d.comp[1].pixels[pcb+x]) - 128
-					cr := int32(d.comp[2].pixels[pcr+x]) - 128
-
-					r := (y + 359*cr + 128) >> 8
-					g := (y - 88*cb - 183*cr + 128) >> 8
-					b := (y + 454*cb + 128) >> 8
-
-					d.pixels[rgbaOffset] = clip(r)   // R
-					d.pixels[rgbaOffset+1] = clip(g) // G
-					d.pixels[rgbaOffset+2] = clip(b) // B
-					d.pixels[rgbaOffset+3] = 255     // A
-					rgbaOffset += 4
-				}
-
-				py += d.comp[0].stride
-				pcb += d.comp[1].stride
-				pcr += d.comp[2].stride
-			}
+			yCbCrToRGBA(&d.comp[0], &d.comp[1], &d.comp[2], d.pixels, d.width, d.height)
 		}
 	} else if d.ncomp == 1 {
 		// Grayscale to RGBA conversion
-		rgbaOffset := 0
-		yOffset := 0
-
-		for y := 0; y < d.height; y++ {
-			for x := 0; x < d.width; x++ {
-				lum := d.comp[0].pixels[yOffset+x]
-
-				d.pixels[rgbaOffset] = lum
-				d.pixels[rgbaOffset+1] = lum
-				d.pixels[rgbaOffset+2] = lum
-				d.pixels[rgbaOffset+3] = 255
-				rgbaOffset += 4
-			}
-
-			yOffset += d.comp[0].stride
-		}
+		grayToRGBA(&d.comp[0], d.pixels, d.width, d.height)
 	}
 
 	return nil
