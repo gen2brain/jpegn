@@ -2,9 +2,9 @@
 [![Status](https://github.com/gen2brain/jpegn/actions/workflows/test.yml/badge.svg)](https://github.com/gen2brain/jpegn/actions)
 [![Go Reference](https://pkg.go.dev/badge/github.com/gen2brain/jpegn.svg)](https://pkg.go.dev/github.com/gen2brain/jpegn)
 
-Baseline JPEG decoder with SIMD optimizations. It is based on [NanoJPEG](https://keyj.emphy.de/nanojpeg/).
+JPEG decoder with SIMD optimizations. It is based on [NanoJPEG](https://keyj.emphy.de/nanojpeg/).
 
-For unsupported formats, such as progressive or CMYK JPEGs, it gracefully falls back to the standard `image/jpeg`.
+For unsupported formats, such as CMYK JPEGs, it gracefully falls back to the standard `image/jpeg`.
 
 ### Benchmark
 

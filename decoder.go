@@ -14,14 +14,15 @@ type vlcCode struct {
 
 // component stores information about a single color component (e.g., Y, Cb, or Cr).
 type component struct {
-	id                 int    // Component identifier (e.g., 1 for Y, 2 for Cb, 3 for Cr).
-	ssX, ssY           int    // Subsampling factors for X and Y axes.
-	width, height      int    // Dimensions of this component in pixels.
-	stride             int    // The number of bytes from one row of pixels to the next.
-	qtSel              int    // Quantization table selector.
-	acTabSel, dcTabSel int    // Huffman table selectors for AC and DC coefficients.
-	dcPred             int    // DC prediction value for differential coding.
-	pixels             []byte // Decoded pixel data for this component.
+	id                 int     // Component identifier (e.g., 1 for Y, 2 for Cb, 3 for Cr).
+	ssX, ssY           int     // Subsampling factors for X and Y axes.
+	width, height      int     // Dimensions of this component in pixels.
+	stride             int     // The number of bytes from one row of pixels to the next.
+	qtSel              int     // Quantization table selector.
+	acTabSel, dcTabSel int     // Huffman table selectors for AC and DC coefficients.
+	dcPred             int     // DC prediction value for differential coding.
+	pixels             []byte  // Decoded pixel data for this component (used in baseline).
+	coeffs             []int32 // Stores DCT coefficients for progressive mode (zigzag order).
 }
 
 // decoder holds the state of the JPEG decoding process.
@@ -36,13 +37,15 @@ type decoder struct {
 	ncomp             int                       // Number of color components (1 for grayscale, 3 for color).
 	comp              [3]component              // Array to hold data for each color component.
 	qtUsed, qtAvail   int                       // Bitmasks tracking used and available quantization tables.
-	qtab              [4]*[64]uint8             // Pointers for pooling.
-	vlcTab            [4]*[65536]vlcCode        // Pointers for pooling.
+	qtab              [4]*[64]uint8             // Pointers for pooling. Stored in zigzag order.
+	dcVlcTab          [4]*[65536]vlcCode        // DC Huffman tables (indices 0-3)
+	acVlcTab          [4]*[65536]vlcCode        // AC Huffman tables (indices 0-3)
 	buf               uint64                    // Use uint64 for fewer refills.
 	bufBits           int                       // Number of valid bits in the bit buffer.
-	block             [64]int32                 // Temporary storage for a single 8x8 block of DCT coefficients.
+	markerHit         bool                      // True if a marker was hit during bit reading.
+	block             [64]int32                 // Temporary storage for a single 8x8 block of DCT coefficients (natural order).
 	rstInterval       int                       // Restart interval in MCUs, for error resilience.
-	pixels            []byte                    // Final decoded pixel data.
+	pixels            []byte                    // Final decoded pixel data (RGBA buffer).
 	subsampleRatio    image.YCbCrSubsampleRatio // The detected YCbCr subsampling ratio.
 	isRGB             bool                      // True if the image is encoded as RGB instead of YCbCr.
 	isBaseline        bool                      // True if the image is a baseline JPEG.
@@ -51,42 +54,16 @@ type decoder struct {
 	toRGBA            bool                      // Whether to convert the final image to RGBA.
 	autoRotate        bool                      // Whether to auto-rotate based on EXIF orientation.
 	orientation       int                       // EXIF orientation tag (1-8).
+
+	// Progressive scan state
+	eobRun int // End-of-Block run counter for progressive AC scans.
 }
 
 // errDecode is used for internal panics during the hot decoding path.
 type errDecode struct{ error }
 
-// newDecoder creates a new decoder instance and allocates the large tables.
-func newDecoder() *decoder {
-	d := new(decoder)
-	for i := 0; i < 4; i++ {
-		d.qtab[i] = new([64]uint8)
-		d.vlcTab[i] = new([65536]vlcCode)
-	}
-
-	return d
-}
-
-// reset clears the decoder state for reuse, preserving the allocated tables.
-func (d *decoder) reset() {
-	// Save pointers to the tables.
-	vlcTmp := d.vlcTab
-	qtabTmp := d.qtab
-
-	// Zero the struct. This clears references (jpegData, pixels, etc.) allowing GC, and resets all state variables.
-	*d = decoder{}
-
-	// Restore pointers to the tables.
-	d.vlcTab = vlcTmp
-	d.qtab = qtabTmp
-}
-
-// panic triggers an internal panic to signal a decoding error in the hot path.
-func (d *decoder) panic(err error) {
-	panic(errDecode{err})
-}
-
-// zz is the zigzag ordering table. It maps the 1D order of coefficients in the JPEG stream to their 2D position in an 8x8 block.
+// zz is the zigzag ordering table. It maps the 1D order of coefficients in the JPEG stream (zigzag index)
+// to their 2D position (natural index) in an 8x8 block.
 var zz = [64]int{
 	0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18,
 	11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35,
@@ -96,15 +73,41 @@ var zz = [64]int{
 
 // clip clamps an int32 value to the valid 8-bit pixel range [0, 255].
 func clip(x int32) byte {
-	if x < 0 {
-		return 0
+	return byte(min(max(x, 0), 255))
+}
+
+// newDecoder creates a new decoder instance and allocates the large tables.
+func newDecoder() *decoder {
+	d := new(decoder)
+	for i := 0; i < 4; i++ {
+		d.qtab[i] = new([64]uint8)
+		// Initialize separate DC and AC Huffman tables.
+		d.dcVlcTab[i] = new([65536]vlcCode)
+		d.acVlcTab[i] = new([65536]vlcCode)
 	}
 
-	if x > 255 {
-		return 255
-	}
+	return d
+}
 
-	return byte(x)
+// panic triggers an internal panic to signal a decoding error in the hot path.
+func (d *decoder) panic(err error) {
+	panic(errDecode{err})
+}
+
+// reset clears the decoder state for reuse, preserving the allocated tables.
+func (d *decoder) reset() {
+	// Save pointers to the tables.
+	dcVlcTmp := d.dcVlcTab
+	acVlcTmp := d.acVlcTab
+	qtabTmp := d.qtab
+
+	// Zero the struct. This clears references (jpegData, pixels, etc.) allowing GC, and resets all state variables.
+	*d = decoder{}
+
+	// Restore pointers to the tables.
+	d.dcVlcTab = dcVlcTmp
+	d.acVlcTab = acVlcTmp
+	d.qtab = qtabTmp
 }
 
 // Bitstream handling
@@ -117,20 +120,15 @@ func (d *decoder) showBits(bits int) int {
 		return 0
 	}
 
+	// Reset the marker hit flag at the start of a new read operation.
+	d.markerHit = false
+
 	// Loop to fill the buffer until we have enough bits or hit a marker.
 fillLoop:
 	for d.bufBits < bits {
 		if d.size <= 0 {
-			// If we run out of data, pad with 0xFF (STOP codes).
-			// Check if we already have enough bits before padding.
-			if d.bufBits >= bits {
-				break
-			}
-
-			d.buf = (d.buf << 8) | 0xFF
-			d.bufBits += 8
-
-			continue
+			// If we run out of data (EOF), we must stop filling the buffer.
+			break fillLoop
 		}
 
 		b := d.jpegData[d.pos]
@@ -147,20 +145,14 @@ fillLoop:
 				b2 := d.jpegData[d.pos] // Peek at the next byte.
 
 				if b2 != 0 {
-					// It's a marker (not 0xFF00).
-					isRST := (b2 | 7) == 0xD7 // Checks if b2 is 0xD0-0xD7
+					// It's a marker (including RSTn). Rewind so the main loop can see the 0xFF marker.
+					// Crucially, revert the bit count and DO NOT add 0xFF to the buffer.
+					d.pos--
+					d.size++
+					d.bufBits -= 8
 
-					if !isRST {
-						// It's a non-RST marker (including 0xFFFF).
-						// Rewind so the main loop can see the 0xFF marker.
-						// Crucially, revert the bit count and DO NOT add 0xFF to the buffer.
-						d.pos--
-						d.size++
-						d.bufBits -= 8
-
-						break fillLoop // Stop filling the buffer.
-					}
-					// If it's an RST marker, we fall through and treat it as data 0xFF.
+					d.markerHit = true // Signal that we stopped due to a marker.
+					break fillLoop     // Stop filling the buffer.
 				} else {
 					// It was 0xFF00 (stuffing byte). Consume the 0x00.
 					d.pos++
@@ -181,10 +173,8 @@ fillLoop:
 	if shift >= 0 {
 		res = d.buf >> shift
 	} else {
-		// This case handles an underfull buffer (e.g., after hitting a marker or EOF padding).
+		// This case handles an underfull buffer (e.g., after hitting a marker or EOF).
 		res = d.buf << (-shift)
-		padMask := uint64((1 << (-shift)) - 1)
-		res |= padMask // Pad with 1s.
 	}
 
 	return int(res & ((1 << bits) - 1))
@@ -206,10 +196,43 @@ func (d *decoder) skipBits(bits int) {
 
 // getBits reads and consumes 'bits' number of bits from the bitstream.
 func (d *decoder) getBits(bits int) int {
+	// Fast path: we already have enough bits in the buffer and there was no marker-driven underflow.
+	// This avoids calling showBits (and its marker reset logic) in the common case.
+	if bits > 0 && d.bufBits >= bits && !d.markerHit {
+		shift := d.bufBits - bits
+		res := int((d.buf >> shift) & ((1 << bits) - 1))
+		d.bufBits = shift
+
+		return res
+	}
+
+	// Slow path: ensure enough bits (and check marker semantics).
 	res := d.showBits(bits)
+
+	// If raw bits reading (used for refinement, sign bits, EOB run lengths)
+	// hits a marker, the result might be padded.
+	// Go stdlib behavior is to stop the scan immediately when a marker is hit
+	// during raw bit reading (unlike EOF, where it allows 0-padding).
+	if d.markerHit && d.bufBits < bits {
+		d.panic(ErrSyntax)
+	}
+
 	d.skipBits(bits)
 
 	return res
+}
+
+// getBit reads a single bit from the bitstream. Used for successive approximation.
+func (d *decoder) getBit() int {
+	// Fast path for the most common case in refinement scans.
+	if d.bufBits > 0 && !d.markerHit {
+		d.bufBits--
+
+		return int((d.buf >> d.bufBits) & 1)
+	}
+
+	// Fallback (handles refill and marker semantics).
+	return d.getBits(1)
 }
 
 // byteAlign aligns the bitstream to the next byte boundary.
@@ -562,7 +585,7 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 	d.mbWidth = (d.width + d.mbSizeX - 1) / d.mbSizeX
 	d.mbHeight = (d.height + d.mbSizeY - 1) / d.mbSizeY
 
-	// Calculate component dimensions and allocate memory for pixels.
+	// Calculate component dimensions and allocate memory for pixels or coefficients.
 	for i := 0; i < d.ncomp; i++ {
 		c := &d.comp[i]
 		c.width = (d.width*c.ssX + ssxMax - 1) / ssxMax
@@ -574,13 +597,33 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 		}
 
 		if !configOnly {
-			pixelSize := c.stride * d.mbHeight * c.ssY << 3
-			if pixelSize <= 0 && (d.width > 0 && d.height > 0) {
-				return ErrOutOfMemory
-			}
+			if d.isProgressive {
+				// Progressive mode: Allocate coefficient buffer.
+				nBlocksX := d.mbWidth * c.ssX
+				nBlocksY := d.mbHeight * c.ssY
+				// 64 coefficients (int32) per block.
+				coeffSize := nBlocksX * nBlocksY * 64
 
-			if pixelSize > 0 {
-				c.pixels = make([]byte, pixelSize)
+				if coeffSize <= 0 && (d.width > 0 && d.height > 0) {
+					return ErrOutOfMemory
+				}
+
+				if coeffSize > 0 {
+					// initialize to zero, required for progressive decoding.
+					c.coeffs = make([]int32, coeffSize)
+				}
+
+				// c.pixels will be allocated in postProcessProgressive.
+			} else {
+				// Baseline mode: Allocate pixel buffer.
+				pixelSize := c.stride * d.mbHeight * c.ssY << 3
+				if pixelSize <= 0 && (d.width > 0 && d.height > 0) {
+					return ErrOutOfMemory
+				}
+
+				if pixelSize > 0 {
+					c.pixels = make([]byte, pixelSize)
+				}
 			}
 		}
 	}
@@ -614,18 +657,29 @@ func (d *decoder) decodeDHT() error {
 	}
 
 	for d.length >= 17 {
-		i := int(d.jpegData[d.pos])
-		if (i & 0xEC) != 0 {
+		infoByte := int(d.jpegData[d.pos])
+
+		// Parse Tc (Table Class) and Th (Table Destination Identifier).
+		tc := infoByte >> 4 // 0=DC, 1=AC
+		th := infoByte & 0x0F
+
+		if tc > 1 {
 			return ErrSyntax
 		}
 
-		if (i & 0x02) != 0 {
-			// This is an early check for progressive JPEGs which are not supported by this decoder.
-			// The main check is for the SOF2 marker.
+		// Baseline only allows th=0 or 1, but progressive allows up to 3.
+		// We support up to 3 for both modes for simplicity.
+		if th > 3 {
 			return ErrUnsupported
 		}
 
-		i = (i | (i >> 3)) & 3 // Table index: 0-1 for DC, 2-3 for AC.
+		// Select the correct VLC table (DC or AC).
+		var vlc *[65536]vlcCode
+		if tc == 0 {
+			vlc = d.dcVlcTab[th]
+		} else {
+			vlc = d.acVlcTab[th]
+		}
 
 		// Read counts of codes for each length (1-16 bits).
 		for codeLen := 1; codeLen <= 16; codeLen++ {
@@ -646,7 +700,6 @@ func (d *decoder) decodeDHT() error {
 		}
 
 		// Build the lookup table using canonical Huffman codes.
-		vlc := d.vlcTab[i]
 
 		// Pooling: Clear the table before filling it.
 		*vlc = [65536]vlcCode{}
@@ -698,7 +751,15 @@ func (d *decoder) decodeDQT() error {
 
 	for d.length >= 65 {
 		i := int(d.jpegData[d.pos])
-		if (i & 0xFC) != 0 {
+
+		// Check precision (Pq). Must be 8-bit (Pq=0).
+		if (i >> 4) != 0 {
+			return ErrUnsupported // 16-bit quantization tables not supported.
+		}
+
+		i &= 0x0F // Tq (Table destination identifier)
+
+		if i > 3 {
 			return ErrSyntax
 		}
 
@@ -709,7 +770,10 @@ func (d *decoder) decodeDQT() error {
 		*t = [64]uint8{}
 
 		for j := 0; j < 64; j++ {
-			t[j] = d.jpegData[d.pos+j+1]
+			// Read value in zigzag order from the stream (j).
+			val := d.jpegData[d.pos+j+1]
+			// Store in natural order (zz[j]) for faster access during dequantization.
+			t[zz[j]] = val
 		}
 
 		if err := d.skip(65); err != nil {
@@ -746,8 +810,13 @@ func (d *decoder) decodeDRI() error {
 // the pre-built Huffman tables. It returns the decoded integer value.
 // Uses panic for errors, uint64 buffer, and fast path extraction.
 func (d *decoder) getVLC(vlc *[65536]vlcCode, code *uint8) int {
-	// Peek 16 bits for Huffman lookup. This ensures the buffer is filled.
-	value16 := d.showBits(16)
+	// Fast path: if we already have >=16 bits in the buffer, avoid showBits call overhead.
+	var value16 int
+	if d.bufBits >= 16 && !d.markerHit {
+		value16 = int((d.buf >> (d.bufBits - 16)) & 0xFFFF)
+	} else {
+		value16 = d.showBits(16)
+	}
 
 	// Lookup Huffman code details from the pre-built table.
 	entry := vlc[value16]
@@ -765,6 +834,12 @@ func (d *decoder) getVLC(vlc *[65536]vlcCode, code *uint8) int {
 
 	// Handle EOB/ZRL (valBits == 0).
 	if valBits == 0 {
+		// If we hit a marker, we must ensure the Huffman code didn't rely on padded bits,
+		// as we won't call getBits() which usually performs this check.
+		if d.markerHit && d.bufBits < huffBits {
+			d.panic(ErrSyntax)
+		}
+
 		d.skipBits(huffBits)
 
 		return 0
@@ -772,16 +847,11 @@ func (d *decoder) getVLC(vlc *[65536]vlcCode, code *uint8) int {
 
 	totalBits := huffBits + valBits
 
-	// Fast path: Check if we have enough bits for Huffman code + value in the buffer.
-	// With an uint64 buffer, this is highly likely.
-	if d.bufBits >= totalBits {
-		// Extract the value.
-		// d.buf holds bits left-aligned. Shift right to align the end of the value to the LSB.
+	// Fast path: enough bits in buffer, no marker.
+	if d.bufBits >= totalBits && !d.markerHit {
 		shift := d.bufBits - totalBits
 		mask := (uint64(1) << valBits) - 1
 		value := int((d.buf >> shift) & mask)
-
-		// Consume bits directly from the buffer.
 		d.bufBits -= totalBits
 
 		// Sign extension.
@@ -792,15 +862,9 @@ func (d *decoder) getVLC(vlc *[65536]vlcCode, code *uint8) int {
 		return value
 	}
 
-	// Slow path: Not enough bits in the buffer (rare with uint64).
-
-	// Consume Huffman bits.
+	// Slow path.
 	d.skipBits(huffBits)
-
-	// Read value bits. This will trigger buffer refill if needed.
 	value := d.getBits(valBits)
-
-	// Sign extension.
 	if value < (1 << (valBits - 1)) {
 		value += ((-1) << valBits) + 1
 	}
@@ -808,7 +872,34 @@ func (d *decoder) getVLC(vlc *[65536]vlcCode, code *uint8) int {
 	return value
 }
 
-// decodeBlock decodes a single 8x8 block of a component. This involves
+// getHuffSymbol decodes a Huffman symbol from the bitstream without reading subsequent value bits.
+// Used for progressive AC decoding where value bits might be handled separately (e.g., refinement).
+func (d *decoder) getHuffSymbol(vlc *[65536]vlcCode) int {
+	// Fast path: if we already have >=16 bits in the buffer, avoid showBits call overhead.
+	var value16 int
+	if d.bufBits >= 16 && !d.markerHit {
+		value16 = int((d.buf >> (d.bufBits - 16)) & 0xFFFF)
+	} else {
+		value16 = d.showBits(16)
+	}
+
+	entry := vlc[value16]
+	huffBits := int(entry.bits)
+	if huffBits == 0 {
+		d.panic(ErrSyntax)
+	}
+
+	// Marker semantics: if this symbol relied on padded bits due to a marker, it's invalid.
+	if d.markerHit && d.bufBits < huffBits {
+		d.panic(ErrSyntax)
+	}
+
+	d.skipBits(huffBits)
+
+	return int(entry.code)
+}
+
+// decodeBlock decodes a single 8x8 block of a component (Baseline). This involves
 // entropy decoding of DC and AC coefficients, dequantization, and applying the IDCT.
 // Uses panic for errors and optimized table access.
 func (d *decoder) decodeBlock(c *component, outOffset int) {
@@ -819,56 +910,56 @@ func (d *decoder) decodeBlock(c *component, outOffset int) {
 	d.block = [64]int32{}
 
 	// Cache pointers to tables used in the loop.
+	// Quantization table is stored in natural order (row-major), not zigzag.
 	qt := d.qtab[c.qtSel]
-	dcVLC := d.vlcTab[c.dcTabSel]
-	acVLC := d.vlcTab[c.acTabSel+2]
+	dcVLC := d.dcVlcTab[c.dcTabSel]
+	acVLC := d.acVlcTab[c.acTabSel]
 
 	// Decode DC coefficient.
 	value = d.getVLC(dcVLC, nil)
-
 	c.dcPred += value
 	d.block[0] = int32(c.dcPred) * int32(qt[0])
 
 	// Decode AC coefficients.
-	coef := 1
+	coef := 1 // coef is the zigzag index.
 	for coef <= 63 {
 		value = d.getVLC(acVLC, &code)
 
-		if code == 0 { // EOB (End of Block)
+		if code == 0 { // EOB
 			break
 		}
 
 		if (code & 0x0F) == 0 {
-			if code != 0xF0 { // ZRL (Zero Run Length)
+			if code != 0xF0 { // ZRL
 				d.panic(ErrSyntax)
 			}
-
 			coef += 16
 
 			continue
 		}
 
-		coef += int(code >> 4) // Skip zero coefficients.
+		coef += int(code >> 4) // Skip run of zeros.
 		if coef > 63 {
 			d.panic(ErrSyntax)
 		}
 
-		// Dequantize and store in zigzag order.
-		d.block[zz[coef]] = int32(value) * int32(qt[coef])
+		// Map zigzag index to natural index.
+		naturalIndex := zz[coef]
+
+		// Dequantize using the natural index.
+		d.block[naturalIndex] = int32(value) * int32(qt[naturalIndex])
+
 		coef++
 	}
 
-	// Perform 2D IDCT.
-	// This calls the unified function which handles both passes,
-	// selecting the optimized implementation (e.g., AVX2) if available.
+	// Perform IDCT (in-place into the output pixel buffer).
 	idct(&d.block, c.pixels, outOffset, c.stride)
 }
 
-// decodeScan decodes the image scan data. It iterates through all MCUs in the
-// image, decoding each block for each component.
+// decodeScan decodes the image scan data. It dispatches to the baseline or progressive decoder.
 // Handles panics from the hot path.
 func (d *decoder) decodeScan() (err error) {
-	// Setup recovery for panics in the hot path (getVLC, decodeBlock).
+	// Setup recovery for panics in the hot path (getVLC, decodeBlock, progressive logic).
 	defer func() {
 		if r := recover(); r != nil {
 			if de, ok := r.(errDecode); ok {
@@ -880,34 +971,50 @@ func (d *decoder) decodeScan() (err error) {
 		}
 	}()
 
-	rstCount := d.rstInterval
-	nextRst := 0
+	// The actual decoding logic is handled by decodeScanInternal which parses the header
+	// and calls the appropriate baseline or progressive loop.
+	return d.decodeScanInternal()
+}
 
+// decodeScanInternal handles the parsing of the SOS header and the main decoding loop.
+func (d *decoder) decodeScanInternal() error {
 	if err := d.decodeLength(); err != nil {
 		return err
 	}
 
-	if d.length < (4 + 2*d.ncomp) {
+	// Parse SOS header.
+	nCompScan := int(d.jpegData[d.pos])
+	if d.length < (4+2*nCompScan) || nCompScan < 1 || nCompScan > 4 {
 		return ErrSyntax
-	}
-
-	if int(d.jpegData[d.pos]) != d.ncomp {
-		return ErrUnsupported // Must match component count from SOF.
 	}
 
 	if err := d.skip(1); err != nil {
 		return err
 	}
 
-	for i := 0; i < d.ncomp; i++ {
-		c := &d.comp[i]
-		if int(d.jpegData[d.pos]) != c.id {
-			return ErrSyntax
+	var scanComp [4]int
+	for i := 0; i < nCompScan; i++ {
+		scanID := int(d.jpegData[d.pos])
+		found := false
+		for j := 0; j < d.ncomp; j++ {
+			if d.comp[j].id == scanID {
+				c := &d.comp[j]
+				scanComp[i] = j
+
+				c.dcTabSel = int(d.jpegData[d.pos+1]) >> 4
+				c.acTabSel = int(d.jpegData[d.pos+1]) & 0x0F
+
+				if c.dcTabSel > 3 || c.acTabSel > 3 {
+					return ErrSyntax
+				}
+
+				found = true
+
+				break
+			}
 		}
 
-		c.dcTabSel = int(d.jpegData[d.pos+1]) >> 4
-		c.acTabSel = int(d.jpegData[d.pos+1]) & 0x0F
-		if c.dcTabSel > 3 || c.acTabSel > 3 {
+		if !found {
 			return ErrSyntax
 		}
 
@@ -916,27 +1023,63 @@ func (d *decoder) decodeScan() (err error) {
 		}
 	}
 
-	// Check for baseline DCT parameters.
-	if d.jpegData[d.pos] != 0 || (d.jpegData[d.pos+1] != 63) || d.jpegData[d.pos+2] != 0 {
-		return ErrUnsupported
-	}
+	ss := int(d.jpegData[d.pos])
+	se := int(d.jpegData[d.pos+1])
+	ah := int(d.jpegData[d.pos+2]) >> 4
+	al := int(d.jpegData[d.pos+2]) & 0x0F
 
 	if err := d.skip(d.length); err != nil {
 		return err
 	}
 
-	// Reset DC predictors at the start of the scan.
-	for k := 0; k < 3; k++ {
-		d.comp[k].dcPred = 0
-	}
-
 	d.buf = 0
 	d.bufBits = 0
 
+	if d.isBaseline {
+		if ss != 0 || se != 63 || ah != 0 || al != 0 {
+			return ErrUnsupported
+		}
+
+		if nCompScan != d.ncomp {
+			return ErrUnsupported
+		}
+
+		return d.decodeScanBaseline(nCompScan, scanComp)
+	}
+
+	if ss > se || se > 63 {
+		return ErrSyntax
+	}
+
+	isDC := ss == 0
+	if isDC {
+		if se != 0 {
+			return ErrSyntax
+		}
+	} else {
+		if nCompScan != 1 {
+			return ErrUnsupported
+		}
+	}
+
+	return d.decodeScanProgressive(nCompScan, scanComp, ss, se, ah, al)
+}
+
+// decodeScanBaseline decodes a baseline JPEG scan.
+func (d *decoder) decodeScanBaseline(nCompScan int, scanComp [4]int) error {
+	rstCount := d.rstInterval
+	nextRst := 0
+
+	// Reset DC predictors at the start of the scan.
+	for k := 0; k < d.ncomp; k++ {
+		d.comp[k].dcPred = 0
+	}
+
 	for mby := 0; mby < d.mbHeight; mby++ {
 		for mbx := 0; mbx < d.mbWidth; mbx++ {
-			for i := 0; i < d.ncomp; i++ {
-				c := &d.comp[i]
+			for i := 0; i < nCompScan; i++ {
+				compIndex := scanComp[i]
+				c := &d.comp[compIndex]
 
 				for sby := 0; sby < c.ssY; sby++ {
 					for sbx := 0; sbx < c.ssX; sbx++ {
@@ -951,23 +1094,487 @@ func (d *decoder) decodeScan() (err error) {
 			if d.rstInterval != 0 {
 				rstCount--
 				if rstCount == 0 {
+					// Per spec, before reading a marker we must be byte-aligned.
 					d.byteAlign()
+					d.buf = 0
+					d.bufBits = 0
 
-					i := d.getBits(16)
-
-					if ((i & 0xFFF8) != 0xFFD0) || ((i & 7) != nextRst) {
+					// Read the restart marker directly from the byte stream.
+					if d.size < 2 {
 						d.panic(ErrSyntax)
 					}
+
+					if d.jpegData[d.pos] != 0xFF || (d.jpegData[d.pos+1]&0xF8) != 0xD0 || int(d.jpegData[d.pos+1]&0x07) != nextRst {
+						d.panic(ErrSyntax)
+					}
+
+					// Consume marker bytes.
+					d.pos += 2
+					d.size -= 2
 
 					nextRst = (nextRst + 1) & 7
 					rstCount = d.rstInterval
 
-					for k := 0; k < 3; k++ {
+					for k := 0; k < d.ncomp; k++ {
 						d.comp[k].dcPred = 0
 					}
 				}
 			}
 		}
+	}
+
+	return nil
+}
+
+// Progressive Decoding Functions
+
+// decodeScanProgressive decodes a progressive JPEG scan.
+func (d *decoder) decodeScanProgressive(nCompScan int, scanComp [4]int, ss, se, ah, al int) error {
+	isDC := ss == 0
+	if isDC && ah == 0 {
+		for i := 0; i < nCompScan; i++ {
+			d.comp[scanComp[i]].dcPred = 0
+		}
+	}
+
+	d.eobRun = 0
+	rstCount := d.rstInterval
+	nextRst := 0
+
+	// Fast-path: the overwhelmingly common case is single-component scan.
+	if nCompScan == 1 {
+		c := &d.comp[scanComp[0]]
+		blocksX := d.mbWidth * c.ssX
+		blocksY := d.mbHeight * c.ssY
+		rowStrideBlocks := blocksX
+		rowStride64 := rowStrideBlocks * 64
+
+		for by := 0; by < blocksY; by++ {
+			rowBase := by * rowStride64
+			for bx := 0; bx < blocksX; bx++ {
+				offset := rowBase + bx*64
+				if isDC {
+					d.decodeBlockDC(c, offset, ah, al)
+				} else {
+					var eobStarted bool
+					if ah == 0 {
+						eobStarted = d.decodeBlockACFirst(c, offset, ss, se, al)
+					} else {
+						eobStarted = d.decodeBlockACRefine(c, offset, ss, se, al)
+					}
+
+					if eobStarted {
+						// Handle restart if needed on unit boundary.
+						if d.rstInterval != 0 {
+							rstCount--
+							if rstCount == 0 {
+								d.eobRun = 0
+								d.byteAlign()
+								d.buf = 0
+								d.bufBits = 0
+
+								if d.size < 2 {
+									d.panic(ErrSyntax)
+								}
+
+								if d.jpegData[d.pos] != 0xFF || (d.jpegData[d.pos+1]&0xF8) != 0xD0 || int(d.jpegData[d.pos+1]&0x07) != nextRst {
+									d.panic(ErrSyntax)
+								}
+
+								d.pos += 2
+								d.size -= 2
+								nextRst = (nextRst + 1) & 7
+								rstCount = d.rstInterval
+								c.dcPred = 0
+							}
+						}
+
+						// Continue to next unit.
+						continue
+					}
+				}
+
+				// Restart marker handling per unit (block) in single-component scans.
+				if d.rstInterval != 0 {
+					rstCount--
+					if rstCount == 0 {
+						d.eobRun = 0
+						d.byteAlign()
+						d.buf = 0
+						d.bufBits = 0
+
+						if d.size < 2 {
+							d.panic(ErrSyntax)
+						}
+
+						if d.jpegData[d.pos] != 0xFF || (d.jpegData[d.pos+1]&0xF8) != 0xD0 || int(d.jpegData[d.pos+1]&0x07) != nextRst {
+							d.panic(ErrSyntax)
+						}
+
+						d.pos += 2
+						d.size -= 2
+						nextRst = (nextRst + 1) & 7
+						rstCount = d.rstInterval
+						c.dcPred = 0
+					}
+				}
+			}
+		}
+
+		d.byteAlign()
+		d.buf = 0
+		d.bufBits = 0
+
+		return nil
+	}
+
+	// Generic (multi-component / interleaved) path remains as before.
+	rstCount = d.rstInterval
+	nextRst = 0
+
+	var loopHeight, loopWidth int
+	if nCompScan == 1 {
+		c := &d.comp[scanComp[0]]
+		loopWidth = d.mbWidth * c.ssX
+		loopHeight = d.mbHeight * c.ssY
+	} else {
+		loopWidth = d.mbWidth
+		loopHeight = d.mbHeight
+	}
+
+	// Pre-calculate block dimensions for single component scans
+	var nBlocksX int
+	if nCompScan == 1 {
+		nBlocksX = d.mbWidth * d.comp[scanComp[0]].ssX
+	}
+
+	for mby := 0; mby < loopHeight; mby++ {
+		for mbx := 0; mbx < loopWidth; mbx++ {
+			for i := 0; i < nCompScan; i++ {
+				compIndex := scanComp[i]
+				c := &d.comp[compIndex]
+
+				var startX, startY, endX, endY int
+				if nCompScan == 1 {
+					startX, startY = mbx, mby
+					endX, endY = mbx+1, mby+1
+				} else {
+					startX, startY = mbx*c.ssX, mby*c.ssY
+					endX, endY = startX+c.ssX, startY+c.ssY
+				}
+
+				// Use pre-calculated nBlocksX for single component scans
+				blockRowStride := nBlocksX
+				if nCompScan != 1 {
+					blockRowStride = d.mbWidth * c.ssX
+				}
+				blockRowStride64 := blockRowStride * 64
+
+				for by := startY; by < endY; by++ {
+					rowBase := by * blockRowStride64
+					for bx := startX; bx < endX; bx++ {
+						blockOffset := rowBase + bx*64
+						if isDC {
+							d.decodeBlockDC(c, blockOffset, ah, al)
+						} else {
+							var eobStarted bool
+							if ah == 0 {
+								eobStarted = d.decodeBlockACFirst(c, blockOffset, ss, se, al)
+							} else {
+								eobStarted = d.decodeBlockACRefine(c, blockOffset, ss, se, al)
+							}
+
+							if eobStarted {
+								goto endOfUnit
+							}
+						}
+					}
+				}
+			}
+		endOfUnit:
+			if d.rstInterval != 0 {
+				rstCount--
+				if rstCount == 0 {
+					d.eobRun = 0
+					d.byteAlign()
+					d.buf = 0
+					d.bufBits = 0
+
+					if d.size < 2 {
+						d.panic(ErrSyntax)
+					}
+
+					if d.jpegData[d.pos] != 0xFF || (d.jpegData[d.pos+1]&0xF8) != 0xD0 || int(d.jpegData[d.pos+1]&0x07) != nextRst {
+						d.panic(ErrSyntax)
+					}
+
+					d.pos += 2
+					d.size -= 2
+					nextRst = (nextRst + 1) & 7
+					rstCount = d.rstInterval
+
+					for k := 0; k < nCompScan; k++ {
+						d.comp[scanComp[k]].dcPred = 0
+					}
+				}
+			}
+		}
+	}
+
+	d.byteAlign()
+	d.buf = 0
+	d.bufBits = 0
+
+	return nil
+}
+
+// decodeBlockDC decodes the DC coefficient (or refines it) for a progressive scan.
+// DC coefficients are always at index 0 (both zigzag and natural).
+func (d *decoder) decodeBlockDC(c *component, offset int, ah, al int) {
+	if ah == 0 {
+		// First DC scan (Ah=0).
+		dcVLC := d.dcVlcTab[c.dcTabSel]
+		diff := d.getVLC(dcVLC, nil)
+		c.dcPred += diff
+		// Store the coefficient, shifted by Al.
+		c.coeffs[offset] = int32(c.dcPred << al)
+	} else {
+		// DC refinement scan (Ah>0).
+		// Per JPEG standard (G.1.2.3) and Go stdlib implementation, we use bitwise OR.
+		if d.getBit() == 1 {
+			c.coeffs[offset] |= int32(1 << al)
+		}
+	}
+}
+
+// decodeBlockACFirst handles the first pass (Ah=0) AC coefficient decoding.
+func (d *decoder) decodeBlockACFirst(c *component, offset int, ss, se, al int) bool {
+	// If an EOB run is active, this entire block has no new ACs in the current band.
+	if d.eobRun > 0 {
+		d.eobRun--
+
+		return true
+	}
+
+	acVLC := d.acVlcTab[c.acTabSel]
+	k := ss // k is the zigzag index.
+
+	// Work on a local 64-coefficient window to avoid repeated offset + zz[k].
+	coefs := c.coeffs[offset : offset+64]
+
+	for k <= se {
+		symbol := d.getHuffSymbol(acVLC)
+		R := symbol >> 4
+		S := symbol & 0x0F
+
+		if S == 0 {
+			if R != 15 {
+				// EOB run. The run length is read from the stream.
+				runLen := 1 << R
+				if R > 0 {
+					runLen += d.getBits(R)
+				}
+
+				d.eobRun = runLen - 1
+
+				return true
+			}
+
+			// ZRL (R=15, S=0). Skip 16 zero coefficients.
+			k += 16
+		} else {
+			// Skip R zero coefficients.
+			k += R
+			if k > se {
+				d.panic(ErrSyntax)
+			}
+
+			// Decode the coefficient value (S bits).
+			value := d.getBits(S)
+			if value < (1 << (S - 1)) {
+				value += ((-1) << S) + 1
+			}
+
+			coefs[zz[k]] = int32(value << al)
+			k++
+		}
+	}
+
+	return false
+}
+
+// decodeBlockACRefine handles the refinement pass (Ah>0) AC coefficient decoding.
+func (d *decoder) decodeBlockACRefine(c *component, offset int, ss, se, al int) bool {
+	acVLC := d.acVlcTab[c.acTabSel]
+	p1 := int32(1 << al)
+
+	coefs := c.coeffs[offset : offset+64]
+	k := ss
+
+	refine := func(idx int) {
+		if d.getBit() == 1 {
+			if coefs[idx] > 0 {
+				coefs[idx] += p1
+			} else {
+				coefs[idx] -= p1
+			}
+		}
+	}
+
+	// If an EOB run is active, just refine existing non-zero coefficients.
+	if d.eobRun > 0 {
+		for ; k <= se; k++ {
+			idx := zz[k]
+			if coefs[idx] != 0 {
+				refine(idx)
+			}
+		}
+
+		d.eobRun--
+
+		return true
+	}
+
+	for k <= se {
+		idx := zz[k]
+
+		// Refine already non-zero coefficient.
+		if coefs[idx] != 0 {
+			refine(idx)
+			k++
+
+			continue
+		}
+
+		// Decode (R,S) symbol.
+		symbol := d.getHuffSymbol(acVLC)
+		R := symbol >> 4
+		S := symbol & 0x0F
+
+		if S == 0 {
+			if R == 15 {
+				// ZRL: skip 16 zero coefficients, refining intervening non-zeros.
+				zerosToSkip := 16
+				for zerosToSkip > 0 {
+					if k > se {
+						break
+					}
+
+					idx = zz[k]
+					if coefs[idx] != 0 {
+						refine(idx)
+					} else {
+						zerosToSkip--
+					}
+
+					k++
+				}
+
+				continue
+			}
+
+			// EOBRUN: read run length, refine remaining non-zeros in this block, then set eobRun.
+			runLen := 1 << R
+			if R > 0 {
+				runLen += d.getBits(R)
+			}
+
+			for ; k <= se; k++ {
+				idx = zz[k]
+				if coefs[idx] != 0 {
+					refine(idx)
+				}
+			}
+
+			d.eobRun = runLen - 1
+
+			return true
+		}
+
+		// S must be 1 for refinement scans.
+		if S != 1 {
+			d.panic(ErrSyntax)
+		}
+
+		// Skip R zeros, refining any intervening non-zero coefficients.
+		for {
+			if k > se {
+				d.panic(ErrSyntax)
+			}
+
+			idx = zz[k]
+			if coefs[idx] != 0 {
+				refine(idx)
+			} else {
+				if R == 0 {
+					break
+				}
+
+				R--
+			}
+
+			k++
+		}
+
+		// Insert new coefficient with magnitude 1<<Al and sign from next bit.
+		if d.getBit() == 1 {
+			coefs[zz[k]] = p1
+		} else {
+			coefs[zz[k]] = -p1
+		}
+
+		k++
+	}
+
+	return false
+}
+
+// postProcessProgressive performs dequantization and IDCT after all progressive scans are complete.
+func (d *decoder) postProcessProgressive() error {
+	for i := 0; i < d.ncomp; i++ {
+		c := &d.comp[i]
+		qt := d.qtab[c.qtSel] // qt is in natural order.
+
+		// Allocate pixel buffer if not already allocated.
+		pixelSize := c.stride * d.mbHeight * c.ssY << 3
+		if pixelSize <= 0 && (d.width > 0 && d.height > 0) {
+			// Check if we actually have coefficients to process.
+			if len(c.coeffs) > 0 {
+				return ErrOutOfMemory
+			}
+
+			continue // Empty component
+		}
+
+		if pixelSize > 0 && c.pixels == nil {
+			c.pixels = make([]byte, pixelSize)
+		} else if c.pixels == nil {
+			continue
+		}
+
+		nBlocksX := d.mbWidth * c.ssX
+		nBlocksY := d.mbHeight * c.ssY
+		rowStride64 := nBlocksX * 64
+
+		for by := 0; by < nBlocksY; by++ {
+			base := by * rowStride64
+			for bx := 0; bx < nBlocksX; bx++ {
+				offset := base + bx*64
+
+				// Dequantize using local 64-window to eliminate bounds checks.
+				coefs := c.coeffs[offset : offset+64]
+				for k := 0; k < 64; k++ {
+					d.block[k] = coefs[k] * int32(qt[k])
+				}
+
+				// IDCT
+				outOffset := (by<<3)*c.stride + (bx << 3)
+				idct(&d.block, c.pixels, outOffset, c.stride)
+			}
+		}
+
+		// Free the coefficient buffer.
+		c.coeffs = nil
 	}
 
 	return nil
@@ -1140,114 +1747,188 @@ func (d *decoder) decode(jpegData []byte, configOnly bool) (image.Image, error) 
 	}
 
 	var sofDecoded bool
+	var scansCompleted int
 
 markerLoop:
 	for {
+		// Skip any stray non-marker bytes.
+		for d.size > 0 && d.jpegData[d.pos] != 0xFF {
+			// Skip forward until we find the next 0xFF marker introducer or run out of data.
+			d.pos++
+			d.size--
+		}
+
 		if d.size < 2 {
 			break markerLoop
 		}
 
+		// At this point we expect a marker introducer 0xFF.
 		if d.jpegData[d.pos] != 0xFF {
+			// If we still can't find a marker, treat as truncated stream.
+			if d.isProgressive && scansCompleted > 0 {
+				// Allow truncated progressive image (best effort), but only
+				// after at least one scan so we don't accept garbage as a JPEG.
+				break markerLoop
+			}
+
 			return nil, ErrSyntax
 		}
 
+		// Collapse any fill bytes 0xFF,0xFF,... before the actual marker code.
+		// (The prior code handled a single 0xFF padding step; now we loop.)
+		for d.size >= 2 && d.jpegData[d.pos+1] == 0xFF {
+			if err := d.skip(1); err != nil {
+				return nil, err
+			}
+		}
+
+		if d.size < 2 {
+			break markerLoop
+		}
+
 		marker := d.jpegData[d.pos+1]
+
+		// Consume the 0xFF + marker byte pair.
 		if err := d.skip(2); err != nil {
 			return nil, err
 		}
 
 		switch marker {
 		case 0xC0: // SOF0 (Start of Frame, Baseline DCT)
+			if sofDecoded {
+				return nil, ErrSyntax
+			}
+
 			d.isBaseline = true
+			d.isProgressive = false
+
 			if err := d.decodeSOF(configOnly); err != nil {
 				return nil, err
 			}
-
 			sofDecoded = true
+
 			if configOnly {
-				break markerLoop // Found config, we are done.
+				break markerLoop
 			}
 		case 0xC2: // SOF2 (Start of Frame, Progressive DCT)
+			if sofDecoded {
+				return nil, ErrSyntax
+			}
+
 			d.isProgressive = true
-			return nil, ErrUnsupported // This decoder does not support progressive JPEGs.
-		case 0xC4: // DHT (Define Huffman Table)
+			d.isBaseline = false
+
+			if err := d.decodeSOF(configOnly); err != nil {
+				return nil, err
+			}
+			sofDecoded = true
+
+			if configOnly {
+				break markerLoop
+			}
+		case 0xC4: // DHT
 			if err := d.decodeDHT(); err != nil {
 				return nil, err
 			}
-		case 0xDB: // DQT (Define Quantization Table)
+		case 0xDB: // DQT
 			if err := d.decodeDQT(); err != nil {
 				return nil, err
 			}
-		case 0xDD: // DRI (Define Restart Interval)
+		case 0xDD: // DRI
 			if err := d.decodeDRI(); err != nil {
 				return nil, err
 			}
-		case 0xDA: // SOS (Start of Scan)
+		case 0xDA: // SOS
 			if !sofDecoded {
-				return nil, ErrSyntax // Scan data found before SOF.
+				return nil, ErrSyntax
 			}
 
 			if err := d.decodeScan(); err != nil {
-				// Check if the error was actually a valid EOI marker.
-				// This can happen if the entropy decoder reads ahead and hits an EOI marker,
-				// potentially causing a syntax error (e.g., invalid Huffman code) caught by panic/recover.
-				if errors.Is(err, ErrSyntax) && d.size >= 0 && d.pos < len(d.jpegData)-1 && d.jpegData[d.pos] == 0xFF && d.jpegData[d.pos+1] == 0xD9 {
+				// We now do a best-effort early exit if:
+				//   * We've already completed at least one scan, AND
+				//   * The very next two bytes are exactly an EOI marker.
+				// Otherwise, we propagate the error so truly malformed streams still fail fast.
+				if errors.Is(err, ErrSyntax) &&
+					scansCompleted > 0 &&
+					d.size >= 2 &&
+					d.jpegData[d.pos] == 0xFF &&
+					d.jpegData[d.pos+1] == 0xD9 {
+
+					// Treat as graceful end (truncated entropy near EOI).
 					break markerLoop
 				}
 
 				return nil, err
 			}
 
-			break markerLoop
-		case 0xFE: // COM (Comment)
+			scansCompleted++
+
+			if d.isBaseline {
+				break markerLoop
+			}
+			// Progressive: continue accumulating scans.
+		case 0xFE: // COM
 			if err := d.skipMarker(); err != nil {
 				return nil, err
 			}
-		case 0xD9: // EOI (End of Image)
+		case 0xD9: // EOI
 			break markerLoop
 		default:
-			if marker >= 0xE0 && marker <= 0xEF { // APPn markers
+			if marker >= 0xE0 && marker <= 0xEF { // APPn
 				if marker == 0xE1 { // APP1 (EXIF)
 					if err := d.decodeAPP1(); err != nil {
-						// Errors in APP1 structure (e.g., bad length) are fatal.
 						return nil, err
 					}
 				} else if marker == 0xEE { // APP14 (Adobe)
 					if err := d.decodeAPP14(); err != nil {
 						return nil, err
 					}
-				} else { // Other APPn markers, e.g., EXIF, JFIF
+				} else {
 					if err := d.skipMarker(); err != nil {
 						return nil, err
 					}
 				}
 			} else if marker >= 0xD0 && marker <= 0xD7 {
-				// RSTn (Restart markers). Should be handled within the scan, but we ignore them here.
+				// RSTn: should be handled inside scan entropy decoding.
 			} else {
-				// Unsupported markers
 				return nil, ErrUnsupported
 			}
+		}
+
+		if d.size <= 0 {
+			// End of data: allow truncated progressive images only after at least one scan.
+			if d.isProgressive && scansCompleted > 0 {
+				break markerLoop
+			}
+
+			return nil, ErrSyntax
 		}
 	}
 
 	if !sofDecoded {
-		return nil, ErrSyntax // No image configuration found.
+		return nil, ErrSyntax
 	}
 
 	if configOnly {
-		return nil, nil // Success for config-only path.
+		return nil, nil
 	}
 
-	// Determine if we need to convert to RGBA.
-	// This is needed if requested (toRGBA), if the source is RGB, or if we need to rotate (autoRotate && orientation > 1).
+	if scansCompleted == 0 {
+		return nil, ErrSyntax
+	}
+
+	// Post-process progressive coefficients (dequantize + IDCT).
+	if d.isProgressive {
+		if err := d.postProcessProgressive(); err != nil {
+			return nil, err
+		}
+	}
+
 	needsRotation := d.autoRotate && d.orientation > 1
 	needsRGBA := d.toRGBA || d.isRGB || needsRotation
 
 	if needsRGBA {
-		// Ensure the RGBA buffer (d.pixels) is allocated. It should have been allocated in decodeSOF
-		// if (d.toRGBA || d.isRGB || d.autoRotate) was true.
 		if d.pixels == nil && (d.width > 0 && d.height > 0) {
-			// This case should theoretically not happen with the current logic.
 			return nil, ErrInternal
 		}
 
@@ -1255,9 +1936,7 @@ markerLoop:
 			return nil, err
 		}
 
-		// Apply rotation/flip if needed.
 		if needsRotation {
-			// This updates d.pixels, d.width, and d.height.
 			d.transform()
 		}
 
@@ -1268,7 +1947,7 @@ markerLoop:
 		}, nil
 	}
 
-	// Native YCbCr/Gray output (no rotation applied)
+	// Native output
 	rect := image.Rect(0, 0, d.width, d.height)
 	switch d.ncomp {
 	case 1:
@@ -1283,12 +1962,11 @@ markerLoop:
 			Cb:             d.comp[1].pixels,
 			Cr:             d.comp[2].pixels,
 			YStride:        d.comp[0].stride,
-			CStride:        d.comp[1].stride, // Cb and Cr strides are the same.
+			CStride:        d.comp[1].stride,
 			SubsampleRatio: d.subsampleRatio,
 			Rect:           rect,
 		}, nil
 	default:
-		// This path should not be reached with valid JPEGs.
 		return nil, ErrInternal
 	}
 }
