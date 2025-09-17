@@ -20,7 +20,7 @@ const (
 
 // cf applies the final step of the filter calculation.
 func cf(x int32) byte {
-	return clip((x + 64) >> 7)
+	return clamp((x + 64) >> 7)
 }
 
 // upsampleCatmullRom performs upsampling by using the 4-tap Catmull-Rom interpolation filter.

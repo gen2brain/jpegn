@@ -116,7 +116,7 @@ func colIdct(blk *[64]int32, offset int, out []byte, outOffset int, stride int) 
 		// Hint BCE. We access up to index 7*stride.
 		_ = out[7*stride]
 
-		x1 = int32(clip(((blk[offset+8*0] + 32) >> 6) + 128))
+		x1 = int32(clamp(((blk[offset+8*0] + 32) >> 6) + 128))
 		b := byte(x1)
 
 		// Unroll the loop for faster execution.
@@ -180,19 +180,19 @@ func colIdct(blk *[64]int32, offset int, out []byte, outOffset int, stride int) 
 
 	// Unroll the loop.
 	currentOutOffset := 0
-	out[currentOutOffset] = clip(((x7 + x1) >> 14) + 128)
+	out[currentOutOffset] = clamp(((x7 + x1) >> 14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clip(((x3 + x2) >> 14) + 128)
+	out[currentOutOffset] = clamp(((x3 + x2) >> 14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clip(((x0 + x4) >> 14) + 128)
+	out[currentOutOffset] = clamp(((x0 + x4) >> 14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clip(((x8 + x6) >> 14) + 128)
+	out[currentOutOffset] = clamp(((x8 + x6) >> 14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clip(((x8 - x6) >> 14) + 128)
+	out[currentOutOffset] = clamp(((x8 - x6) >> 14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clip(((x0 - x4) >> 14) + 128)
+	out[currentOutOffset] = clamp(((x0 - x4) >> 14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clip(((x3 - x2) >> 14) + 128)
+	out[currentOutOffset] = clamp(((x3 - x2) >> 14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clip(((x7 - x1) >> 14) + 128)
+	out[currentOutOffset] = clamp(((x7 - x1) >> 14) + 128)
 }

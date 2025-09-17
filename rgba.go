@@ -25,10 +25,10 @@ func yCbCrToRGBA(y, cb, cr *component, dst []byte, width, height int) {
 			b := (yVal + 454*cbVal + 128) >> 8
 
 			// Store the clipped results in the destination buffer.
-			dst[rgbaOffset] = clip(r)   // R
-			dst[rgbaOffset+1] = clip(g) // G
-			dst[rgbaOffset+2] = clip(b) // B
-			dst[rgbaOffset+3] = 255     // A (fully opaque)
+			dst[rgbaOffset] = clamp(r)   // R
+			dst[rgbaOffset+1] = clamp(g) // G
+			dst[rgbaOffset+2] = clamp(b) // B
+			dst[rgbaOffset+3] = 255      // A (fully opaque)
 			rgbaOffset += 4
 		}
 
