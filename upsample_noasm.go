@@ -23,22 +23,22 @@ func cf(x int32) byte {
 	return clamp((x + 64) >> 7)
 }
 
-// upsampleCatmullRom performs upsampling by using the 4-tap Catmull-Rom interpolation filter.
-func upsampleCatmullRomGeneric(c *component, width, height int) {
+// upsampleCatmullRomScalar performs upsampling by using the 4-tap Catmull-Rom interpolation filter.
+func upsampleCatmullRomScalar(c *component, width, height int) {
 	for c.width < width || c.height < height {
 		if c.width < width {
-			upsampleHGeneric(c)
+			upsampleHScalar(c)
 		}
 
 		if c.height < height {
-			upsampleVGeneric(c)
+			upsampleVScalar(c)
 		}
 	}
 }
 
-// upsampleH performs a 2x horizontal upsampling on a component's pixel data.
+// upsampleHScalar performs a 2x horizontal upsampling on a component's pixel data.
 // It uses a 4-tap Catmull-Rom interpolation filter.
-func upsampleHGeneric(c *component) {
+func upsampleHScalar(c *component) {
 	out := make([]byte, (c.width*c.height)<<1)
 
 	newWidth := c.width << 1
@@ -91,9 +91,9 @@ func upsampleHGeneric(c *component) {
 	c.pixels = out
 }
 
-// upsampleV performs a 2x vertical upsampling on a component's pixel data.
-// Like upsampleH, it uses a 4-tap Catmull-Rom filter and symmetric boundary conditions.
-func upsampleVGeneric(c *component) {
+// upsampleVScalar performs a 2x vertical upsampling on a component's pixel data.
+// Like upsampleHScalar, it uses a 4-tap Catmull-Rom filter and symmetric boundary conditions.
+func upsampleVScalar(c *component) {
 	w := c.width
 	s1 := c.stride
 	s2 := s1 + s1
@@ -158,9 +158,9 @@ func upsampleVGeneric(c *component) {
 	c.pixels = out
 }
 
-// upsampleNearestNeighbor performs upsampling by integer factors using the nearest-neighbor algorithm.
+// upsampleNearestNeighborScalar performs upsampling by integer factors using the nearest-neighbor algorithm.
 // This method is fast but produces lower-quality, "blocky" results compared to Catmull-Rom interpolation.
-func upsampleNearestNeighborGeneric(c *component, width, height int) {
+func upsampleNearestNeighborScalar(c *component, width, height int) {
 	var xShift, yShift uint
 	tempWidth := c.width
 	tempHeight := c.height

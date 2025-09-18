@@ -182,7 +182,7 @@ func TestUpsampleNearestNeighborAssembly(t *testing.T) {
 
 			// Run both the assembly-optimized and generic versions.
 			upsampleNearestNeighbor(cAsm, targetW, targetH)
-			upsampleNearestNeighborGeneric(cGeneric, targetW, targetH)
+			upsampleNearestNeighborScalar(cGeneric, targetW, targetH)
 
 			// The results must be identical.
 			if cAsm.width != cGeneric.width || cAsm.height != cGeneric.height {

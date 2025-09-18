@@ -37,7 +37,7 @@ func upsampleNearestNeighbor(c *component, width, height int) {
 		origHeight := c.height
 
 		if origWidth <= 0 || origHeight <= 0 || len(origPixels) == 0 {
-			upsampleNearestNeighborGeneric(c, width, height)
+			upsampleNearestNeighborScalar(c, width, height)
 
 			return
 		}
@@ -54,20 +54,20 @@ func upsampleNearestNeighbor(c *component, width, height int) {
 		return
 	}
 
-	upsampleNearestNeighborGeneric(c, width, height)
+	upsampleNearestNeighborScalar(c, width, height)
 }
 
 // upsampleCatmullRom is a placeholder that falls back to the generic Go implementation.
 func upsampleCatmullRom(c *component, width, height int) {
-	upsampleCatmullRomGeneric(c, width, height)
+	upsampleCatmullRomScalar(c, width, height)
 }
 
 // upsampleH is a placeholder that falls back to the generic Go implementation.
 func upsampleH(c *component) {
-	upsampleHGeneric(c)
+	upsampleHScalar(c)
 }
 
 // upsampleV is a placeholder that falls back to the generic Go implementation.
 func upsampleV(c *component) {
-	upsampleVGeneric(c)
+	upsampleVScalar(c)
 }

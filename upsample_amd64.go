@@ -48,7 +48,7 @@ func upsampleNearestNeighbor(c *component, width, height int) {
 		return
 	}
 
-	upsampleNearestNeighborGeneric(c, width, height)
+	upsampleNearestNeighborScalar(c, width, height)
 }
 
 //go:noescape
@@ -89,7 +89,7 @@ func upsampleH(c *component) {
 	}
 
 	// Fallback to Go implementation if AVX2 is not used or width is small.
-	upsampleHGeneric(c)
+	upsampleHScalar(c)
 }
 
 func upsampleV(c *component) {
@@ -110,5 +110,5 @@ func upsampleV(c *component) {
 	}
 
 	// Fallback to Go implementation.
-	upsampleVGeneric(c)
+	upsampleVScalar(c)
 }
