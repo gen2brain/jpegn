@@ -13,6 +13,9 @@ import (
 //go:embed testdata/test.420.jpg
 var test420 []byte
 
+//go:embed testdata/test.420.orientation.jpg
+var test420o []byte
+
 //go:embed testdata/test.422.jpg
 var test422 []byte
 
@@ -30,12 +33,6 @@ var testGRAY []byte
 
 //go:embed testdata/test.rgb.jpg
 var testRGB []byte
-
-//go:embed testdata/test.420p.jpg
-var test420p []byte
-
-//go:embed testdata/test.420o.jpg
-var test420o []byte
 
 // baselineGray2x2 is a minimal 2x2, 8-bit grayscale, baseline JPEG.
 var baselineGray2x2 = []byte{

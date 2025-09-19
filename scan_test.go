@@ -9,6 +9,24 @@ import (
 	"testing"
 )
 
+//go:embed testdata/test.420.progressive.jpg
+var test420p []byte
+
+//go:embed testdata/test.422.progressive.jpg
+var test422p []byte
+
+//go:embed testdata/test.440.progressive.jpg
+var test440p []byte
+
+//go:embed testdata/test.444.progressive.jpg
+var test444p []byte
+
+//go:embed testdata/test.gray.progressive.jpg
+var testGRAYp []byte
+
+//go:embed testdata/test.rgb.progressive.jpg
+var testRGBp []byte
+
 // TestDecodeProgressive verifies that the decoder correctly decodes a progressive JPEG.
 func TestDecodeProgressive(t *testing.T) {
 	// Test both native YCbCr output and RGBA output.
@@ -83,6 +101,67 @@ func TestDecodeProgressive(t *testing.T) {
 						!isClose(got.Cr, expected.Cr, tc.tolerance) {
 						t.Errorf("Pixel at %v - got YCbCr %v, want close to YCbCr %v", p, got, expected)
 					}
+				}
+			}
+		})
+	}
+}
+
+// TestDecodeProgressiveSubsampling tests decoding of progressive JPEGs with different subsampling ratios,
+// verifying the default YCbCr output.
+func TestDecodeProgressiveSubsampling(t *testing.T) {
+	var testFiles = map[string][]byte{
+		"4:2:0": test420p,
+		"4:2:2": test422p,
+		"4:4:0": test440p,
+		"4:4:4": test444p,
+	}
+
+	for name, data := range testFiles {
+		t.Run(name, func(t *testing.T) {
+			refImgStd, err := jpeg.Decode(bytes.NewReader(data))
+			if err != nil {
+				t.Fatalf("std jpeg.Decode failed: %v", err)
+			}
+
+			refImg, ok := refImgStd.(*image.YCbCr)
+			if !ok {
+				t.Fatalf("std jpeg.Decode did not return a YCbCr image, but %T", refImgStd)
+			}
+			refBounds := refImg.Bounds()
+
+			img, err := Decode(bytes.NewReader(data))
+			if err != nil {
+				t.Fatalf("Decode failed: %v", err)
+			}
+			bounds := img.Bounds()
+
+			if bounds != refBounds {
+				t.Fatalf("Bounds mismatch: got %v, want %v", bounds, refBounds)
+			}
+
+			myImg, ok := img.(*image.YCbCr)
+			if !ok {
+				t.Fatalf("jpegn.Decode did not return a YCbCr image, but %T", img)
+			}
+
+			// Check a few sample pixel values against the reference.
+			pointsToCheck := []image.Point{
+				{X: 0, Y: 0},
+				{X: refBounds.Dx() - 1, Y: refBounds.Dy() - 1},
+				{X: 100, Y: 400},
+				{X: refBounds.Dx() / 2, Y: refBounds.Dy() / 2},
+				{X: 42, Y: 42},
+			}
+
+			for _, p := range pointsToCheck {
+				expected := refImg.YCbCrAt(p.X, p.Y)
+				got := myImg.YCbCrAt(p.X, p.Y)
+
+				if !isClose(got.Y, expected.Y, defaultTolerance) ||
+					!isClose(got.Cb, expected.Cb, defaultTolerance) ||
+					!isClose(got.Cr, expected.Cr, defaultTolerance) {
+					t.Errorf("Pixel at %v - got YCbCr %v, want close to YCbCr %v", p, got, expected)
 				}
 			}
 		})
