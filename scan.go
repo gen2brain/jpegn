@@ -252,10 +252,6 @@ func (d *decoder) decodeScanInternal() error {
 		if se != 0 {
 			return ErrSyntax
 		}
-	} else {
-		if nCompScan != 1 {
-			return ErrUnsupported
-		}
 	}
 
 	return d.decodeScanProgressive(nCompScan, scanComp, ss, se, ah, al)
@@ -337,157 +333,44 @@ func (d *decoder) decodeScanProgressive(nCompScan int, scanComp [4]int, ss, se, 
 	rstCount := d.rstInterval
 	nextRst := 0
 
-	// Fast-path: the overwhelmingly common case is single-component scan.
-	if nCompScan == 1 {
-		c := &d.comp[scanComp[0]]
-		blocksX := d.mbWidth * c.ssX
-		blocksY := d.mbHeight * c.ssY
-		rowStrideBlocks := blocksX
-		rowStride64 := rowStrideBlocks * 64
-
-		for by := 0; by < blocksY; by++ {
-			rowBase := by * rowStride64
-			for bx := 0; bx < blocksX; bx++ {
-				offset := rowBase + bx*64
-				if isDC {
-					d.decodeBlockDC(c, offset, ah, al)
-				} else {
-					var eobStarted bool
-					if ah == 0 {
-						eobStarted = d.decodeBlockACFirst(c, offset, ss, se, al)
-					} else {
-						eobStarted = d.decodeBlockACRefine(c, offset, ss, se, al)
-					}
-
-					if eobStarted {
-						// Handle restart if needed on unit boundary.
-						if d.rstInterval != 0 {
-							rstCount--
-							if rstCount == 0 {
-								d.eobRun = 0
-								d.byteAlign()
-								d.buf = 0
-								d.bufBits = 0
-
-								if d.size < 2 {
-									d.panic(ErrSyntax)
-								}
-
-								if d.jpegData[d.pos] != 0xFF || (d.jpegData[d.pos+1]&0xF8) != 0xD0 || int(d.jpegData[d.pos+1]&0x07) != nextRst {
-									d.panic(ErrSyntax)
-								}
-
-								d.pos += 2
-								d.size -= 2
-								nextRst = (nextRst + 1) & 7
-								rstCount = d.rstInterval
-								c.dcPred = 0
-							}
-						}
-
-						// Continue to next unit.
-						continue
-					}
-				}
-
-				// Restart marker handling per unit (block) in single-component scans.
-				if d.rstInterval != 0 {
-					rstCount--
-					if rstCount == 0 {
-						d.eobRun = 0
-						d.byteAlign()
-						d.buf = 0
-						d.bufBits = 0
-
-						if d.size < 2 {
-							d.panic(ErrSyntax)
-						}
-
-						if d.jpegData[d.pos] != 0xFF || (d.jpegData[d.pos+1]&0xF8) != 0xD0 || int(d.jpegData[d.pos+1]&0x07) != nextRst {
-							d.panic(ErrSyntax)
-						}
-
-						d.pos += 2
-						d.size -= 2
-						nextRst = (nextRst + 1) & 7
-						rstCount = d.rstInterval
-						c.dcPred = 0
-					}
-				}
-			}
-		}
-
-		d.byteAlign()
-		d.buf = 0
-		d.bufBits = 0
-
-		return nil
-	}
-
-	// Generic (multi-component / interleaved) path remains as before.
-	rstCount = d.rstInterval
-	nextRst = 0
-
-	var loopHeight, loopWidth int
-	if nCompScan == 1 {
-		c := &d.comp[scanComp[0]]
-		loopWidth = d.mbWidth * c.ssX
-		loopHeight = d.mbHeight * c.ssY
-	} else {
-		loopWidth = d.mbWidth
-		loopHeight = d.mbHeight
-	}
-
-	// Pre-calculate block dimensions for single component scans
-	var nBlocksX int
-	if nCompScan == 1 {
-		nBlocksX = d.mbWidth * d.comp[scanComp[0]].ssX
-	}
-
-	for mby := 0; mby < loopHeight; mby++ {
-		for mbx := 0; mbx < loopWidth; mbx++ {
+	// The progressive scan decoder iterates over MCUs.
+	// For each MCU, it processes all the blocks for each component in the scan.
+	// This unified loop handles both interleaved and non-interleaved scans.
+	for mby := 0; mby < d.mbHeight; mby++ {
+		for mbx := 0; mbx < d.mbWidth; mbx++ {
 			for i := 0; i < nCompScan; i++ {
 				compIndex := scanComp[i]
 				c := &d.comp[compIndex]
 
-				var startX, startY, endX, endY int
-				if nCompScan == 1 {
-					startX, startY = mbx, mby
-					endX, endY = mbx+1, mby+1
-				} else {
-					startX, startY = mbx*c.ssX, mby*c.ssY
-					endX, endY = startX+c.ssX, startY+c.ssY
-				}
+				// Total number of blocks in a full row for this component.
+				blockRowStride := d.mbWidth * c.ssX
 
-				// Use pre-calculated nBlocksX for single component scans
-				blockRowStride := nBlocksX
-				if nCompScan != 1 {
-					blockRowStride = d.mbWidth * c.ssX
-				}
-				blockRowStride64 := blockRowStride * 64
+				// Top-left block coordinates for this component in this MCU.
+				mcuBlockStartY := mby * c.ssY
+				mcuBlockStartX := mbx * c.ssX
 
-				for by := startY; by < endY; by++ {
-					rowBase := by * blockRowStride64
-					for bx := startX; bx < endX; bx++ {
-						blockOffset := rowBase + bx*64
+				// Loop over all blocks of this component within the current MCU.
+				for sby := 0; sby < c.ssY; sby++ {
+					for sbx := 0; sbx < c.ssX; sbx++ {
+						// Absolute block coordinates.
+						by := mcuBlockStartY + sby
+						bx := mcuBlockStartX + sbx
+
+						// Calculate the linear offset into the coefficient buffer.
+						offset := (by*blockRowStride + bx) * 64
+
 						if isDC {
-							d.decodeBlockDC(c, blockOffset, ah, al)
+							d.decodeBlockDC(c, offset, ah, al)
+						} else if ah == 0 {
+							d.decodeBlockACFirst(c, offset, ss, se, al)
 						} else {
-							var eobStarted bool
-							if ah == 0 {
-								eobStarted = d.decodeBlockACFirst(c, blockOffset, ss, se, al)
-							} else {
-								eobStarted = d.decodeBlockACRefine(c, blockOffset, ss, se, al)
-							}
-
-							if eobStarted {
-								goto endOfUnit
-							}
+							d.decodeBlockACRefine(c, offset, ss, se, al)
 						}
 					}
 				}
 			}
-		endOfUnit:
+
+			// Handle restart markers after each MCU is processed.
 			if d.rstInterval != 0 {
 				rstCount--
 				if rstCount == 0 {
@@ -509,6 +392,7 @@ func (d *decoder) decodeScanProgressive(nCompScan int, scanComp [4]int, ss, se, 
 					nextRst = (nextRst + 1) & 7
 					rstCount = d.rstInterval
 
+					// Reset DC predictors for all components in the scan.
 					for k := 0; k < nCompScan; k++ {
 						d.comp[scanComp[k]].dcPred = 0
 					}
@@ -517,6 +401,7 @@ func (d *decoder) decodeScanProgressive(nCompScan int, scanComp [4]int, ss, se, 
 		}
 	}
 
+	// Align to the next byte boundary after the scan is complete.
 	d.byteAlign()
 	d.buf = 0
 	d.bufBits = 0
@@ -544,48 +429,52 @@ func (d *decoder) decodeBlockDC(c *component, offset int, ah, al int) {
 }
 
 // decodeBlockACFirst handles the first pass (Ah=0) AC coefficient decoding.
-func (d *decoder) decodeBlockACFirst(c *component, offset int, ss, se, al int) bool {
-	// If an EOB run is active, this entire block has no new ACs in the current band.
+func (d *decoder) decodeBlockACFirst(c *component, offset int, ss, se, al int) {
 	if d.eobRun > 0 {
 		d.eobRun--
-
-		return true
+		return
 	}
 
 	acVLC := d.acVlcTab[c.acTabSel]
-	k := ss // k is the zigzag index.
+	k := ss
 
-	// Work on a local 64-coefficient window to avoid repeated offset + zz[k].
 	coefs := c.coeffs[offset : offset+64]
 
 	for k <= se {
+		if d.markerHit {
+			return
+		}
 		symbol := d.getHuffSymbol(acVLC)
 		R := symbol >> 4
 		S := symbol & 0x0F
 
 		if S == 0 {
 			if R != 15 {
-				// EOB run. The run length is read from the stream.
 				runLen := 1 << R
 				if R > 0 {
+					if d.markerHit { // Check again after getHuffSymbol
+						return
+					}
+
 					runLen += d.getBits(R)
 				}
 
 				d.eobRun = runLen - 1
 
-				return true
+				return
 			}
 
-			// ZRL (R=15, S=0). Skip 16 zero coefficients.
-			k += 16
+			k += 16 // ZRL
 		} else {
-			// Skip R zero coefficients.
 			k += R
 			if k > se {
 				d.panic(ErrSyntax)
 			}
 
-			// Decode the coefficient value (S bits).
+			if d.markerHit {
+				return
+			}
+
 			value := d.getBits(S)
 			if value < (1 << (S - 1)) {
 				value += ((-1) << S) + 1
@@ -595,12 +484,10 @@ func (d *decoder) decodeBlockACFirst(c *component, offset int, ss, se, al int) b
 			k++
 		}
 	}
-
-	return false
 }
 
 // decodeBlockACRefine handles the refinement pass (Ah>0) AC coefficient decoding.
-func (d *decoder) decodeBlockACRefine(c *component, offset int, ss, se, al int) bool {
+func (d *decoder) decodeBlockACRefine(c *component, offset int, ss, se, al int) {
 	acVLC := d.acVlcTab[c.acTabSel]
 	p1 := int32(1 << al)
 
@@ -608,6 +495,10 @@ func (d *decoder) decodeBlockACRefine(c *component, offset int, ss, se, al int) 
 	k := ss
 
 	refine := func(idx int) {
+		if d.markerHit {
+			return
+		}
+
 		if d.getBit() == 1 {
 			if coefs[idx] > 0 {
 				coefs[idx] += p1
@@ -617,9 +508,12 @@ func (d *decoder) decodeBlockACRefine(c *component, offset int, ss, se, al int) 
 		}
 	}
 
-	// If an EOB run is active, just refine existing non-zero coefficients.
 	if d.eobRun > 0 {
 		for ; k <= se; k++ {
+			if d.markerHit {
+				return
+			}
+
 			idx := zz[k]
 			if coefs[idx] != 0 {
 				refine(idx)
@@ -628,13 +522,16 @@ func (d *decoder) decodeBlockACRefine(c *component, offset int, ss, se, al int) 
 
 		d.eobRun--
 
-		return true
+		return
 	}
 
 	for k <= se {
+		if d.markerHit {
+			return
+		}
+
 		idx := zz[k]
 
-		// Refine already non-zero coefficient.
 		if coefs[idx] != 0 {
 			refine(idx)
 			k++
@@ -642,18 +539,20 @@ func (d *decoder) decodeBlockACRefine(c *component, offset int, ss, se, al int) 
 			continue
 		}
 
-		// Decode (R,S) symbol.
 		symbol := d.getHuffSymbol(acVLC)
 		R := symbol >> 4
 		S := symbol & 0x0F
 
 		if S == 0 {
-			if R == 15 {
-				// ZRL: skip 16 zero coefficients, refining intervening non-zeros.
+			if R == 15 { // ZRL
 				zerosToSkip := 16
 				for zerosToSkip > 0 {
 					if k > se {
 						break
+					}
+
+					if d.markerHit {
+						return
 					}
 
 					idx = zz[k]
@@ -669,13 +568,20 @@ func (d *decoder) decodeBlockACRefine(c *component, offset int, ss, se, al int) 
 				continue
 			}
 
-			// EOBRUN: read run length, refine remaining non-zeros in this block, then set eobRun.
 			runLen := 1 << R
 			if R > 0 {
+				if d.markerHit {
+					return
+				}
+
 				runLen += d.getBits(R)
 			}
 
 			for ; k <= se; k++ {
+				if d.markerHit {
+					return
+				}
+
 				idx = zz[k]
 				if coefs[idx] != 0 {
 					refine(idx)
@@ -684,18 +590,20 @@ func (d *decoder) decodeBlockACRefine(c *component, offset int, ss, se, al int) 
 
 			d.eobRun = runLen - 1
 
-			return true
+			return
 		}
 
-		// S must be 1 for refinement scans.
 		if S != 1 {
 			d.panic(ErrSyntax)
 		}
 
-		// Skip R zeros, refining any intervening non-zero coefficients.
 		for {
 			if k > se {
 				d.panic(ErrSyntax)
+			}
+
+			if d.markerHit {
+				return
 			}
 
 			idx = zz[k]
@@ -712,7 +620,10 @@ func (d *decoder) decodeBlockACRefine(c *component, offset int, ss, se, al int) 
 			k++
 		}
 
-		// Insert new coefficient with magnitude 1<<Al and sign from next bit.
+		if d.markerHit {
+			return
+		}
+
 		if d.getBit() == 1 {
 			coefs[zz[k]] = p1
 		} else {
@@ -721,8 +632,6 @@ func (d *decoder) decodeBlockACRefine(c *component, offset int, ss, se, al int) 
 
 		k++
 	}
-
-	return false
 }
 
 // postProcessProgressive performs dequantization and IDCT after all progressive scans are complete.

@@ -54,9 +54,7 @@ type decoder struct {
 	toRGBA            bool                      // Whether to convert the final image to RGBA.
 	autoRotate        bool                      // Whether to auto-rotate based on EXIF orientation.
 	orientation       int                       // EXIF orientation tag (1-8).
-
-	// Progressive scan state
-	eobRun int // End-of-Block run counter for progressive AC scans.
+	eobRun            int                       // End-of-Block run counter for progressive AC scans.
 }
 
 // errDecode is used for internal panics during the hot decoding path.
