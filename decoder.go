@@ -1,6 +1,7 @@
 package jpegn
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"image"
@@ -780,57 +781,58 @@ func (d *decoder) decode(jpegData []byte, configOnly bool) (image.Image, error) 
 	if d.size < 2 || d.jpegData[0] != 0xFF || d.jpegData[1] != 0xD8 {
 		return nil, ErrNoJPEG
 	}
-
-	if err := d.skip(2); err != nil {
-		return nil, err
-	}
+	d.pos += 2
+	d.size -= 2
 
 	var sofDecoded bool
 	var scansCompleted int
 
 markerLoop:
 	for {
-		// Skip any stray non-marker bytes.
-		for d.size > 0 && d.jpegData[d.pos] != 0xFF {
-			// Skip forward until we find the next 0xFF marker introducer or run out of data.
-			d.pos++
-			d.size--
-		}
-
+		// Check if there's enough data for a marker before starting the search.
 		if d.size < 2 {
-			break markerLoop
+			if d.isProgressive && scansCompleted > 0 {
+				break markerLoop // Allow truncated progressive files.
+			}
+			return nil, ErrSyntax
 		}
 
-		// At this point we expect a marker introducer 0xFF.
-		if d.jpegData[d.pos] != 0xFF {
-			// If we still can't find a marker, treat as truncated stream.
+		// Find the next marker introducer (0xFF).
+		idx := bytes.IndexByte(d.jpegData[d.pos:d.pos+d.size], 0xFF)
+		if idx == -1 {
 			if d.isProgressive && scansCompleted > 0 {
-				// Allow truncated progressive image (best effort), but only
-				// after at least one scan so we don't accept garbage as a JPEG.
+				break markerLoop // No more markers, but we have a partial image.
+			}
+
+			return nil, ErrSyntax // No marker found in remaining data.
+		}
+
+		// Advance position past any stray data to the 0xFF.
+		d.pos += idx
+		d.size -= idx
+
+		// We have at least one 0xFF at d.pos. Find the marker code that follows it, skipping any fill bytes (0xFF).
+		searchPos := d.pos + 1
+		for searchPos < d.pos+d.size && d.jpegData[searchPos] == 0xFF {
+			searchPos++
+		}
+
+		// Check if we ran out of data while skipping fill bytes.
+		if searchPos >= d.pos+d.size {
+			if d.isProgressive && scansCompleted > 0 {
 				break markerLoop
 			}
 
 			return nil, ErrSyntax
 		}
 
-		// Collapse any fill bytes 0xFF,0xFF,... before the actual marker code.
-		// (The prior code handled a single 0xFF padding step; now we loop.)
-		for d.size >= 2 && d.jpegData[d.pos+1] == 0xFF {
-			if err := d.skip(1); err != nil {
-				return nil, err
-			}
-		}
+		// We found a non-0xFF byte, which is our marker code.
+		marker := d.jpegData[searchPos]
 
-		if d.size < 2 {
-			break markerLoop
-		}
-
-		marker := d.jpegData[d.pos+1]
-
-		// Consume the 0xFF + marker byte pair.
-		if err := d.skip(2); err != nil {
-			return nil, err
-		}
+		// Advance the main decoder position past all the skipped 0xFFs and the marker code.
+		consumedBytes := (searchPos + 1) - d.pos
+		d.pos += consumedBytes
+		d.size -= consumedBytes
 
 		switch marker {
 		case 0xC0: // SOF0 (Start of Frame, Baseline DCT)
@@ -849,51 +851,49 @@ markerLoop:
 			if configOnly {
 				break markerLoop
 			}
+
 		case 0xC2: // SOF2 (Start of Frame, Progressive DCT)
 			if sofDecoded {
 				return nil, ErrSyntax
 			}
-
 			d.isProgressive = true
 			d.isBaseline = false
-
 			if err := d.decodeSOF(configOnly); err != nil {
 				return nil, err
 			}
 			sofDecoded = true
-
 			if configOnly {
 				break markerLoop
 			}
+
 		case 0xC4: // DHT
 			if err := d.decodeDHT(); err != nil {
 				return nil, err
 			}
+
 		case 0xDB: // DQT
 			if err := d.decodeDQT(); err != nil {
 				return nil, err
 			}
+
 		case 0xDD: // DRI
 			if err := d.decodeDRI(); err != nil {
 				return nil, err
 			}
+
 		case 0xDA: // SOS
 			if !sofDecoded {
 				return nil, ErrSyntax
 			}
 
 			if err := d.decodeScan(); err != nil {
-				// We now do a best-effort early exit if:
-				//   * We've already completed at least one scan, AND
-				//   * The very next two bytes are exactly an EOI marker.
-				// Otherwise, we propagate the error so truly malformed streams still fail fast.
+				// Best-effort early exit if just before EOI and at least one scan decoded.
 				if errors.Is(err, ErrSyntax) &&
 					scansCompleted > 0 &&
 					d.size >= 2 &&
 					d.jpegData[d.pos] == 0xFF &&
 					d.jpegData[d.pos+1] == 0xD9 {
 
-					// Treat as graceful end (truncated entropy near EOI).
 					break markerLoop
 				}
 
@@ -903,15 +903,21 @@ markerLoop:
 			scansCompleted++
 
 			if d.isBaseline {
+				// Baseline has a single scan.
 				break markerLoop
 			}
-			// Progressive: continue accumulating scans.
+
 		case 0xFE: // COM
 			if err := d.skipMarker(); err != nil {
 				return nil, err
 			}
+
 		case 0xD9: // EOI
 			break markerLoop
+
+		case 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7: // RSTn outside scan: ignore
+			continue
+
 		default:
 			if marker >= 0xE0 && marker <= 0xEF { // APPn
 				if marker == 0xE1 { // APP1 (EXIF)
@@ -927,20 +933,9 @@ markerLoop:
 						return nil, err
 					}
 				}
-			} else if marker >= 0xD0 && marker <= 0xD7 {
-				// RSTn: should be handled inside scan entropy decoding.
 			} else {
 				return nil, ErrUnsupported
 			}
-		}
-
-		if d.size <= 0 {
-			// End of data: allow truncated progressive images only after at least one scan.
-			if d.isProgressive && scansCompleted > 0 {
-				break markerLoop
-			}
-
-			return nil, ErrSyntax
 		}
 	}
 
@@ -988,6 +983,7 @@ markerLoop:
 
 	// Native output
 	rect := image.Rect(0, 0, d.width, d.height)
+
 	switch d.ncomp {
 	case 1:
 		return &image.Gray{
