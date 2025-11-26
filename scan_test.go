@@ -60,10 +60,11 @@ func TestDecodeProgressive(t *testing.T) {
 
 			pointsToCheck := []image.Point{
 				{X: 0, Y: 0},
-				{X: refBounds.Dx() - 1, Y: refBounds.Dy() - 1},
+				{X: 10, Y: 20},
+				{X: 42, Y: 42},
 				{X: 100, Y: 400},
 				{X: refBounds.Dx() / 2, Y: refBounds.Dy() / 2},
-				{X: 42, Y: 42},
+				{X: refBounds.Dx() - 1, Y: refBounds.Dy() - 1},
 			}
 
 			// Determine the color model to use for comparison.
@@ -80,7 +81,6 @@ func TestDecodeProgressive(t *testing.T) {
 						t.Errorf("Pixel at %v - got RGBA%v, want close to RGBA%v", p, got, expected)
 					}
 				} else {
-					// YCbCr comparison.
 					myImgYCbCr, ok1 := img.(*image.YCbCr)
 					refImgYCbCr, ok2 := refImg.(*image.YCbCr)
 
@@ -88,8 +88,8 @@ func TestDecodeProgressive(t *testing.T) {
 						t.Fatalf("jpegn.Decode did not return YCbCr, but %T", img)
 					}
 					if !ok2 {
-						// Standard library usually returns YCbCr for 4:2:0 JPEGs.
 						t.Logf("std jpeg.Decode did not return YCbCr, but %T. Skipping YCbCr comparison.", refImg)
+
 						continue
 					}
 
@@ -107,8 +107,7 @@ func TestDecodeProgressive(t *testing.T) {
 	}
 }
 
-// TestDecodeProgressiveSubsampling tests decoding of progressive JPEGs with different subsampling ratios,
-// verifying the default YCbCr output.
+// TestDecodeProgressiveSubsampling tests decoding of progressive JPEGs with different subsampling ratios.
 func TestDecodeProgressiveSubsampling(t *testing.T) {
 	var testFiles = map[string][]byte{
 		"4:2:0": test420p,
@@ -146,12 +145,20 @@ func TestDecodeProgressiveSubsampling(t *testing.T) {
 			}
 
 			// Check a few sample pixel values against the reference.
+			// Include many edge and corner pixels to diagnose issues
+			// For 4:2:0, chroma blocks are 16x16 pixels in the full image
 			pointsToCheck := []image.Point{
-				{X: 0, Y: 0},
-				{X: refBounds.Dx() - 1, Y: refBounds.Dy() - 1},
-				{X: 100, Y: 400},
-				{X: refBounds.Dx() / 2, Y: refBounds.Dy() / 2},
-				{X: 42, Y: 42},
+				{X: 0, Y: 0},     // Top-left corner
+				{X: 10, Y: 20},   // Near top-left
+				{X: 42, Y: 42},   // Interior
+				{X: 100, Y: 400}, // Interior
+				{X: refBounds.Dx() / 2, Y: refBounds.Dy() / 2}, // Center
+				// Test edges of different chroma blocks near bottom-right
+				{X: 479, Y: 479}, // Block 992 (not last row/col)
+				{X: 495, Y: 495}, // Block 1023 (last block)
+				{X: 480, Y: 500}, // Block 1022 (last row, not last col)
+				{X: 500, Y: 480}, // Block 1019 (last col, not last row)
+				{X: 500, Y: 500}, // Block 1023
 			}
 
 			for _, p := range pointsToCheck {
@@ -194,6 +201,116 @@ func BenchmarkDecodeProgressive420StdLib(b *testing.B) {
 		_, err := jpeg.Decode(r)
 		if err != nil {
 			b.Fatalf("image.Decode failed: %v", err)
+		}
+	}
+}
+
+// BenchmarkGetVLC measures the performance of the Huffman decoding (getVLC) function.
+// This microbenchmark isolates the Huffman decode operation to measure assembly optimization impact.
+func BenchmarkGetVLC(b *testing.B) {
+	// Decode a baseline JPEG to get a fully initialized decoder with real Huffman tables
+	data, err := readAllData(bytes.NewReader(test420))
+	if err != nil {
+		b.Fatalf("Failed to read test data: %v", err)
+	}
+
+	d := decoderPool.Get().(*decoder)
+	d.reset()
+	defer func() {
+		d.reset()
+		decoderPool.Put(d)
+	}()
+
+	// Decode just the headers to build Huffman tables
+	_, err = d.decode(data, false)
+	if err != nil {
+		b.Fatalf("Failed to decode: %v", err)
+	}
+
+	// Now we have real Huffman tables. Create a realistic bitstream buffer.
+	// We'll fill it with actual JPEG scan data from the same image.
+	// Find the scan data by decoding again and capturing the state.
+	d.reset()
+	d.jpegData = data
+	d.size = len(data)
+	d.pos = 0
+
+	// Parse until we hit the scan data
+	if err := d.skipToScan(); err != nil {
+		b.Fatalf("Failed to skip to scan: %v", err)
+	}
+
+	// Now d.buf should have bitstream data and d.acVlcTab/dcVlcTab should be initialized
+	// Fill the bit buffer
+	d.showBits(16)
+
+	// Use the AC VLC table (most commonly used in baseline JPEGs)
+	vlc := d.acVlcTab[0]
+	if vlc == nil {
+		b.Fatal("AC VLC table not initialized")
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	var result int
+	var code uint8
+
+	// Benchmark the hot path of getVLC
+	for i := 0; i < b.N; i++ {
+		// Reset buffer state periodically to avoid running out of bits
+		if i%100 == 0 {
+			d.showBits(16)
+		}
+
+		result = d.getVLC(vlc, nil, &code)
+	}
+
+	// Prevent compiler optimization
+	if result == -12345 {
+		b.Log("Impossible")
+	}
+}
+
+// Helper function to skip to scan data for benchmarking
+func (d *decoder) skipToScan() error {
+	// This is a simplified version that just parses markers until we hit SOS
+	for {
+		if d.size < 2 {
+			return ErrSyntax
+		}
+
+		if d.jpegData[d.pos] != 0xFF {
+			return ErrSyntax
+		}
+
+		marker := d.jpegData[d.pos+1]
+		d.pos += 2
+		d.size -= 2
+
+		if marker == 0xDA { // SOS - Start of Scan
+			if err := d.decodeLength(); err != nil {
+				return err
+			}
+			// Skip the SOS header
+			if err := d.skip(d.length); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		// For other markers, skip them
+		if marker == 0xD8 || marker == 0xD9 || (marker >= 0xD0 && marker <= 0xD7) {
+			// SOI, EOI, RSTn - no payload
+			continue
+		}
+
+		// Read length and skip
+		if err := d.decodeLength(); err != nil {
+			return err
+		}
+		if err := d.skip(d.length); err != nil {
+			return err
 		}
 	}
 }

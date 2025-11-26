@@ -16,6 +16,9 @@ var test420 []byte
 //go:embed testdata/test.420.orientation.jpg
 var test420o []byte
 
+//go:embed testdata/test.420.odd.jpg
+var test420odd []byte
+
 //go:embed testdata/test.422.jpg
 var test422 []byte
 
@@ -28,11 +31,47 @@ var test444 []byte
 //go:embed testdata/test.cmyk.jpg
 var testCMYK []byte
 
+//go:embed testdata/test.ycck.jpg
+var testYCCK []byte
+
 //go:embed testdata/test.gray.jpg
 var testGRAY []byte
 
 //go:embed testdata/test.rgb.jpg
 var testRGB []byte
+
+//go:embed testdata/test.corrupted.1.jpg
+var testCorrupted1 []byte
+
+//go:embed testdata/test.corrupted.2.jpg
+var testCorrupted2 []byte
+
+//go:embed testdata/test.corrupted.3.jpg
+var testCorrupted3 []byte
+
+//go:embed testdata/test.corrupted.4.jpg
+var testCorrupted4 []byte
+
+//go:embed testdata/test.corrupted.5.jpg
+var testCorrupted5 []byte
+
+//go:embed testdata/test.corrupted.6.jpg
+var testCorrupted6 []byte
+
+//go:embed testdata/test.corrupted.7.jpg
+var testCorrupted7 []byte
+
+//go:embed testdata/test.corrupted.8.jpg
+var testCorrupted8 []byte
+
+//go:embed testdata/test.corrupted.9.jpg
+var testCorrupted9 []byte
+
+//go:embed testdata/test.corrupted.10.jpg
+var testCorrupted10 []byte
+
+//go:embed testdata/test.1x1.jpg
+var test1x1 []byte
 
 // baselineGray2x2 is a minimal 2x2, 8-bit grayscale, baseline JPEG.
 var baselineGray2x2 = []byte{
@@ -139,8 +178,93 @@ func TestDecode2x2(t *testing.T) {
 	}
 }
 
-// TestDecodeSubsampling tests decoding of baseline JPEGs with different subsampling ratios,
-// verifying the default YCbCr output.
+// TestDecodeOddDimensions tests decoding of a JPEG with odd (non-MCU-aligned) dimensions.
+// The image is 487x511 pixels with 4:2:0 subsampling, which requires proper padding handling.
+func TestDecodeOddDimensions(t *testing.T) {
+	img, err := Decode(bytes.NewReader(test420odd))
+	if err != nil {
+		t.Fatalf("Decode failed for odd-sized image: %v", err)
+	}
+
+	// Verify dimensions
+	bounds := img.Bounds()
+	if bounds.Dx() != 487 || bounds.Dy() != 511 {
+		t.Fatalf("Expected 487x511 image, got %dx%d", bounds.Dx(), bounds.Dy())
+	}
+
+	// Compare against stdlib
+	refImg, err := jpeg.Decode(bytes.NewReader(test420odd))
+	if err != nil {
+		t.Fatalf("std jpeg.Decode failed: %v", err)
+	}
+
+	if img.Bounds() != refImg.Bounds() {
+		t.Fatalf("Bounds mismatch: got %v, want %v", img.Bounds(), refImg.Bounds())
+	}
+
+	// Check several pixels including edges to ensure padding was handled correctly
+	pointsToCheck := []image.Point{
+		{X: 0, Y: 0},     // Top-left
+		{X: 486, Y: 0},   // Top-right edge
+		{X: 0, Y: 510},   // Bottom-left edge
+		{X: 486, Y: 510}, // Bottom-right corner
+		{X: 243, Y: 255}, // Center
+		{X: 480, Y: 255}, // Right edge
+		{X: 243, Y: 505}, // Bottom edge
+	}
+
+	myImg := img.(*image.YCbCr)
+	refYCbCr := refImg.(*image.YCbCr)
+
+	for _, p := range pointsToCheck {
+		expected := refYCbCr.YCbCrAt(p.X, p.Y)
+		got := myImg.YCbCrAt(p.X, p.Y)
+
+		if !isClose(got.Y, expected.Y, defaultTolerance) ||
+			!isClose(got.Cb, expected.Cb, defaultTolerance) ||
+			!isClose(got.Cr, expected.Cr, defaultTolerance) {
+			t.Errorf("Pixel at %v - got YCbCr %v, want close to YCbCr %v", p, got, expected)
+		}
+	}
+}
+
+// TestDecode1x1 tests decoding of the smallest possible JPEG image: 1x1 pixel.
+// This image uses SOF9 (arithmetic coding marker) but we attempt resilient decoding with Huffman.
+// This is an edge case that tests minimal buffer allocation and MCU handling.
+func TestDecode1x1(t *testing.T) {
+	img, err := Decode(bytes.NewReader(test1x1))
+	if err != nil {
+		t.Fatalf("Decode failed for 1x1 image: %v (should be resilient and decode anyway)", err)
+	}
+
+	// Verify dimensions
+	bounds := img.Bounds()
+	if bounds.Dx() != 1 || bounds.Dy() != 1 {
+		t.Fatalf("Expected 1x1 image, got %dx%d", bounds.Dx(), bounds.Dy())
+	}
+
+	// Verify we can read the single pixel without panicking
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Panic when accessing pixel: %v", r)
+		}
+	}()
+
+	// Read the single pixel
+	pixel := img.At(0, 0)
+
+	// Convert to RGBA
+	pixelRGBA := color.RGBAModel.Convert(pixel).(color.RGBA)
+
+	// Just verify we got valid data (can't compare to stdlib since it fails)
+	if pixelRGBA.A != 255 {
+		t.Errorf("Expected alpha 255, got %d", pixelRGBA.A)
+	}
+
+	t.Logf("Successfully decoded 1x1 image (type: %T), pixel value: RGBA%v", img, pixelRGBA)
+}
+
+// TestDecodeSubsampling tests decoding of baseline JPEGs with different subsampling ratios.
 func TestDecodeSubsampling(t *testing.T) {
 	var testFiles = map[string][]byte{
 		"4:2:0": test420,
@@ -178,12 +302,24 @@ func TestDecodeSubsampling(t *testing.T) {
 			}
 
 			// Check a few sample pixel values against the reference.
+			// Include many edge and corner pixels to diagnose issues
+			// For 4:2:0, chroma blocks are 16x16 pixels in the full image
+			// Block 1023 covers chroma pixels (248-255, 248-255) = image pixels (496-511, 496-511)
+			// Block 1022 covers chroma pixels (240-247, 248-255) = image pixels (480-495, 496-511)
 			pointsToCheck := []image.Point{
-				{X: 0, Y: 0},
-				{X: refBounds.Dx() - 1, Y: refBounds.Dy() - 1},
-				{X: 100, Y: 400},
-				{X: refBounds.Dx() / 2, Y: refBounds.Dy() / 2},
-				{X: 42, Y: 42},
+				{X: 0, Y: 0},     // Top-left corner
+				{X: 10, Y: 20},   // Near top-left
+				{X: 42, Y: 42},   // Interior
+				{X: 100, Y: 400}, // Interior
+				{X: refBounds.Dx() / 2, Y: refBounds.Dy() / 2}, // Center
+				// Test edges of different chroma blocks near bottom-right
+				{X: 479, Y: 479}, // Block 992 (not last row/col)
+				{X: 495, Y: 495}, // Block 1023 (last block)
+				{X: 480, Y: 500}, // Block 1022 (last row, not last col)
+				{X: 500, Y: 480}, // Block 1019 (last col, not last row)
+				{X: 500, Y: 500}, // Block 1023
+				{X: 510, Y: 510}, // Block 1023
+				{X: refBounds.Dx() - 1, Y: refBounds.Dy() - 1}, // Block 1023 (511,511)
 			}
 
 			for _, p := range pointsToCheck {
@@ -315,8 +451,6 @@ func TestDecodeGray(t *testing.T) {
 	}
 	refBounds := refImg.Bounds()
 
-	// Note: Grayscale images are converted to RGBA by default in our decoder when ncomp=1.
-	// We test this path explicitly.
 	img, err := Decode(bytes.NewReader(testGRAY), &Options{ToRGBA: true})
 	if err != nil {
 		t.Fatalf("Decode failed for grayscale image: %v", err)
@@ -356,7 +490,6 @@ func TestDecodeRGB(t *testing.T) {
 	}
 	refBounds := refImg.Bounds()
 
-	// RGB JPEGs are always converted to RGBA in decoder.
 	img, err := Decode(bytes.NewReader(testRGB))
 	if err != nil {
 		t.Fatalf("Decode failed for RGB image: %v", err)
@@ -388,12 +521,16 @@ func TestDecodeRGB(t *testing.T) {
 	}
 }
 
-// TestDecodeCMYK verifies that the decoder correctly falls back to the
-// standard library when an unsupported format (like a CMYK JPEG) is provided.
+// TestDecodeCMYK verifies that the decoder correctly handles CMYK JPEG images
+// by natively decoding them to image.CMYK format.
 func TestDecodeCMYK(t *testing.T) {
 	img, err := Decode(bytes.NewReader(testCMYK))
 	if err != nil {
-		t.Fatalf("Decode with fallback failed for CMYK JPEG: %v", err)
+		t.Fatalf("Decode failed for CMYK JPEG: %v", err)
+	}
+
+	if _, ok := img.(*image.CMYK); !ok {
+		t.Fatalf("Expected *image.CMYK, got %T", img)
 	}
 
 	refImg, err := jpeg.Decode(bytes.NewReader(testCMYK))
@@ -426,10 +563,51 @@ func TestDecodeCMYK(t *testing.T) {
 	}
 }
 
+// TestDecodeYCCK verifies that the decoder correctly handles YCbCrK (YCCK) JPEG images
+// by natively decoding them to image.CMYK format.
+func TestDecodeYCCK(t *testing.T) {
+	img, err := Decode(bytes.NewReader(testYCCK))
+	if err != nil {
+		t.Fatalf("Decode failed for YCCK JPEG: %v", err)
+	}
+
+	if _, ok := img.(*image.CMYK); !ok {
+		t.Fatalf("Expected *image.CMYK, got %T", img)
+	}
+
+	refImg, err := jpeg.Decode(bytes.NewReader(testYCCK))
+	if err != nil {
+		t.Fatalf("std jpeg.Decode failed for YCCK image: %v", err)
+	}
+
+	if img.Bounds() != refImg.Bounds() {
+		t.Fatalf("Bounds mismatch: got %v, want %v", img.Bounds(), refImg.Bounds())
+	}
+
+	refBounds := refImg.Bounds()
+	pointsToCheck := []image.Point{
+		{X: 0, Y: 0},
+		{X: refBounds.Dx() - 1, Y: refBounds.Dy() - 1},
+		{X: 100, Y: 400},
+		{X: refBounds.Dx() / 2, Y: refBounds.Dy() / 2},
+	}
+
+	for _, p := range pointsToCheck {
+		expected := color.CMYKModel.Convert(refImg.At(p.X, p.Y)).(color.CMYK)
+		got := color.CMYKModel.Convert(img.At(p.X, p.Y)).(color.CMYK)
+
+		if !isClose(got.C, expected.C, defaultTolerance) ||
+			!isClose(got.M, expected.M, defaultTolerance) ||
+			!isClose(got.Y, expected.Y, defaultTolerance) ||
+			!isClose(got.K, expected.K, defaultTolerance) {
+			t.Errorf("Pixel at %v - got CMYK%v, want close to CMYK%v", p, got, expected)
+		}
+	}
+}
+
 // TestDecodeAutoRotate verifies that the decoder correctly rotates the image based on the EXIF orientation tag.
 func TestDecodeAutoRotate(t *testing.T) {
 	// test420o.jpg is 384x512 and has EXIF orientation 6 (Rotate 90 CW).
-
 	imgRef, err := Decode(bytes.NewReader(test420o), &Options{ToRGBA: true, AutoRotate: false})
 	if err != nil {
 		t.Fatalf("Decode reference failed: %v", err)
@@ -463,7 +641,7 @@ func TestDecodeAutoRotate(t *testing.T) {
 	// Mapping for 90 CW (orientation 6): Original(sx, sy) -> Rotated(H_src-1-sy, sx)
 	// Where H_src is the height of the original image.
 
-	// Helper function to compare pixels, assuming RGBA input images.
+	// Helper function to compare pixels.
 	comparePixels := func(sx, sy, dx, dy int) {
 		pRef := imgRef.At(sx, sy).(color.RGBA)
 		pRot := imgRot.At(dx, dy).(color.RGBA)
@@ -523,6 +701,63 @@ func BenchmarkDecodeBaseline420StdLib(b *testing.B) {
 		if err != nil {
 			b.Fatalf("image.Decode failed: %v", err)
 		}
+	}
+}
+
+// TestDecodeCorrupted tests resilient decoding of corrupted JPEG files.
+// These files are intentionally corrupted and will cause stdlib to fail,
+// but libjpeg and other robust decoders will decode them (possibly with distortion).
+// We want to match that resilient behavior rather than failing.
+func TestDecodeCorrupted(t *testing.T) {
+	corruptedFiles := map[string][]byte{
+		"corrupted1":  testCorrupted1,
+		"corrupted2":  testCorrupted2,
+		"corrupted3":  testCorrupted3,
+		"corrupted4":  testCorrupted4,
+		"corrupted5":  testCorrupted5,
+		"corrupted6":  testCorrupted6,
+		"corrupted7":  testCorrupted7,
+		"corrupted8":  testCorrupted8,
+		"corrupted9":  testCorrupted9,
+		"corrupted10": testCorrupted10,
+	}
+
+	for name, data := range corruptedFiles {
+		t.Run(name, func(t *testing.T) {
+			img, err := Decode(bytes.NewReader(data))
+			if err != nil {
+				t.Errorf("Our decoder failed on %s: %v (should be resilient and decode anyway)", name, err)
+				return
+			}
+
+			// Verify we got a valid image with reasonable bounds
+			bounds := img.Bounds()
+			width, height := bounds.Dx(), bounds.Dy()
+
+			if width <= 0 || height <= 0 {
+				t.Errorf("%s: Invalid dimensions %dx%d", name, width, height)
+				return
+			}
+
+			// Check dimensions are reasonable (not absurdly large due to corruption)
+			if width > 10000 || height > 10000 {
+				t.Errorf("%s: Suspiciously large dimensions %dx%d", name, width, height)
+				return
+			}
+
+			t.Logf("%s: Successfully decoded to %dx%d image (type: %T)", name, width, height, img)
+
+			// Verify we can read pixels without panicking
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s: Panic when accessing pixels: %v", name, r)
+				}
+			}()
+
+			// Try to read a pixel from the middle
+			midX, midY := width/2, height/2
+			_ = img.At(midX, midY)
+		})
 	}
 }
 

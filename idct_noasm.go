@@ -196,3 +196,85 @@ func colIdct(blk *[64]int32, offset int, out []byte, outOffset int, stride int) 
 	currentOutOffset += stride
 	out[currentOutOffset] = clamp(((x7 - x1) >> 14) + 128)
 }
+
+// idct8x8To1x1 performs DC-only IDCT for 1/8 scaling (produces 1x1 output from 8x8 DCT block)
+func idct8x8To1x1(blk *[64]int32, out []byte, outOffset int, stride int) {
+	// For 1/8 scaling, only the DC coefficient matters
+	// DC coefficient is at index 0, already dequantized
+	sample := clamp(((blk[0] + 32) >> 6) + 128)
+	out[outOffset] = sample
+}
+
+// idct8x8To2x2 performs reduced IDCT for 1/4 scaling (produces 2x2 output from 8x8 DCT block)
+func idct8x8To2x2(blk *[64]int32, out []byte, outOffset int, stride int) {
+	// Reduced 2x2 IDCT uses only DC and low-frequency AC coefficients
+	// We compute a simplified transform using only the necessary coefficients
+
+	// Load coefficients (natural order)
+	c00 := blk[0]  // DC
+	c01 := blk[1]  // AC (0,1)
+	c10 := blk[8]  // AC (1,0)
+	c11 := blk[9]  // AC (1,1)
+
+	// Simplified 2D IDCT for 2x2 output
+	// This is a reduced form that evaluates only what's needed for 2x2 output
+	const scale = 1024 // Scale factor for fixed-point arithmetic
+
+	// Row transform (simplified)
+	r0 := c00 + c01
+	r1 := c00 - c01
+	r2 := c10 + c11
+	r3 := c10 - c11
+
+	// Column transform and output (with level shift)
+	out[outOffset] = clamp(((r0+r2)>>6) + 128)
+	out[outOffset+1] = clamp(((r1+r3)>>6) + 128)
+	out[outOffset+stride] = clamp(((r0-r2)>>6) + 128)
+	out[outOffset+stride+1] = clamp(((r1-r3)>>6) + 128)
+}
+
+// idct8x8To4x4 performs reduced IDCT for 1/2 scaling (produces 4x4 output from 8x8 DCT block)
+func idct8x8To4x4(blk *[64]int32, out []byte, outOffset int, stride int) {
+	// Reduced 4x4 IDCT using AAN algorithm variant
+	// We only process the top-left 4x4 DCT coefficients
+
+	var tmp [16]int32
+
+	// 1D IDCT on rows (process first 4 rows, first 4 columns)
+	for i := 0; i < 4; i++ {
+		s0 := blk[i*8+0]
+		s1 := blk[i*8+1]
+		s2 := blk[i*8+2]
+		s3 := blk[i*8+3]
+
+		// Simplified butterfly structure for 4-point IDCT
+		t0 := s0 + s2
+		t1 := s0 - s2
+		t2 := (s1 >> 1) - s3
+		t3 := s1 + (s3 >> 1)
+
+		tmp[i*4+0] = t0 + t3
+		tmp[i*4+1] = t1 + t2
+		tmp[i*4+2] = t1 - t2
+		tmp[i*4+3] = t0 - t3
+	}
+
+	// 1D IDCT on columns
+	for i := 0; i < 4; i++ {
+		s0 := tmp[0*4+i]
+		s1 := tmp[1*4+i]
+		s2 := tmp[2*4+i]
+		s3 := tmp[3*4+i]
+
+		t0 := s0 + s2
+		t1 := s0 - s2
+		t2 := (s1 >> 1) - s3
+		t3 := s1 + (s3 >> 1)
+
+		// Output with proper scaling and level shift
+		out[outOffset+0*stride+i] = clamp(((t0+t3)>>5) + 128)
+		out[outOffset+1*stride+i] = clamp(((t1+t2)>>5) + 128)
+		out[outOffset+2*stride+i] = clamp(((t1-t2)>>5) + 128)
+		out[outOffset+3*stride+i] = clamp(((t0-t3)>>5) + 128)
+	}
+}

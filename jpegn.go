@@ -1,23 +1,23 @@
 package jpegn
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
-	"image/jpeg"
 	"io"
 	"sync"
 )
 
 // Standard error types for JPEG decoding.
 var (
-	ErrNoJPEG      = errors.New("not a JPEG file")
-	ErrUnsupported = errors.New("unsupported format")
-	ErrOutOfMemory = errors.New("out of memory")
-	ErrInternal    = errors.New("internal error")
-	ErrSyntax      = errors.New("syntax error")
+	ErrNoJPEG             = errors.New("not a JPEG file")
+	ErrNoEXIF             = errors.New("no EXIF data found")
+	ErrUnsupported        = errors.New("unsupported format")
+	ErrOutOfMemory        = errors.New("out of memory")
+	ErrInternal           = errors.New("internal error")
+	ErrSyntax             = errors.New("syntax error")
+	ErrMissingHuffmanCode = errors.New("missing Huffman code")
 )
 
 // UpsampleMethod defines the algorithm used for chroma upsampling.
@@ -45,17 +45,22 @@ type Options struct {
 	// If true, the decoded image will be rotated/flipped to match the intended viewing orientation.
 	// This process forces the output to RGBA if a transformation is applied.
 	AutoRotate bool
+	// ScaleDenom specifies the IDCT scaling denominator for efficient downscaling.
+	// Valid values are 1 (no scaling), 2 (1/2 size), 4 (1/4 size), or 8 (1/8 size).
+	// Invalid values will be clamped to the nearest valid value.
+	// This produces higher quality and faster decoding than decoding full size and then downsampling.
+	ScaleDenom int
 }
 
-// A reasonable upper limit for the size of JPEG headers.
-// Most headers are well under this size (64KB).
-const maxHeaderSize = 65536
+// Initial buffer size for reading JPEG headers in DecodeConfig.
+// Most JPEG headers with SOF marker fit in the first 512 bytes.
+const initialHeaderSize = 512
 
 // A pool for header-sized buffers to reduce allocations in DecodeConfig.
 var headerBufferPool = sync.Pool{
 	New: func() interface{} {
-		// Allocate a buffer large enough to hold typical JPEG headers.
-		b := make([]byte, maxHeaderSize)
+		// Allocate a small initial buffer for reading JPEG headers.
+		b := make([]byte, initialHeaderSize)
 
 		return &b
 	},
@@ -96,7 +101,6 @@ func readAllData(r io.Reader) ([]byte, error) {
 
 // Decode reads a JPEG image from r and returns it as an [image.Image].
 // It accepts an optional Options struct to control decoding parameters.
-// If the JPEG format is unsupported (e.g., progressive, or CMYK), it falls back to the standard library's decoder.
 func Decode(r io.Reader, opts ...*Options) (image.Image, error) {
 	data, err := readAllData(r)
 	if err != nil {
@@ -105,6 +109,9 @@ func Decode(r io.Reader, opts ...*Options) (image.Image, error) {
 
 	// Get a decoder from the pool.
 	d := decoderPool.Get().(*decoder)
+
+	d.reset()
+
 	// Ensure the decoder is reset and returned to the pool when finished.
 	defer func() {
 		d.reset()
@@ -115,21 +122,29 @@ func Decode(r io.Reader, opts ...*Options) (image.Image, error) {
 	d.toRGBA = false
 	d.upsampleMethod = NearestNeighbor
 	d.autoRotate = false
+	d.scaleDenom = 1 // Default: no scaling
 
 	if len(opts) > 0 && opts[0] != nil {
 		d.upsampleMethod = opts[0].UpsampleMethod
 		d.toRGBA = opts[0].ToRGBA
 		d.autoRotate = opts[0].AutoRotate
+
+		// Validate and set scaleDenom - must be 1, 2, 4, or 8
+		scaleDenom := opts[0].ScaleDenom
+		if scaleDenom <= 0 || scaleDenom == 1 {
+			scaleDenom = 1
+		} else if scaleDenom <= 2 {
+			scaleDenom = 2
+		} else if scaleDenom <= 4 {
+			scaleDenom = 4
+		} else {
+			scaleDenom = 8
+		}
+		d.scaleDenom = scaleDenom
 	}
 
 	img, err := d.decode(data, false)
 	if err != nil {
-		// If the format is unsupported, fall back to the standard library.
-		if errors.Is(err, ErrUnsupported) {
-			// Note: The standard library's jpeg.Decode does not auto-rotate based on EXIF.
-			return jpeg.Decode(bytes.NewReader(data))
-		}
-
 		return nil, err
 	}
 
@@ -158,23 +173,19 @@ func DecodeConfig(r io.Reader) (image.Config, error) {
 
 	// Use a decoder from our pool.
 	d := decoderPool.Get().(*decoder)
+
+	d.resetForConfig()
+
 	defer func() {
-		d.reset()
+		d.resetForConfig()
 		decoderPool.Put(d)
 	}()
 
 	// We disable autorotation parsing for DecodeConfig as we only need the raw dimensions from SOF.
 	d.autoRotate = false
+	d.scaleDenom = 1 // Always use full size for DecodeConfig
 
 	if _, err := d.decode(headerData[:n], true); err != nil {
-		if errors.Is(err, ErrUnsupported) {
-			// Fallback for unsupported formats. We must provide the standard library's decoder with the full image stream.
-			// We reconstruct it by joining the header data we already read with the rest of the original reader.
-			fullReader := io.MultiReader(bytes.NewReader(headerData[:n]), r)
-
-			return jpeg.DecodeConfig(fullReader)
-		}
-
 		return image.Config{}, err
 	}
 
@@ -188,6 +199,8 @@ func DecodeConfig(r io.Reader) (image.Config, error) {
 		} else {
 			cm = color.YCbCrModel
 		}
+	case 4:
+		cm = color.CMYKModel
 	default:
 		return image.Config{}, ErrUnsupported
 	}
