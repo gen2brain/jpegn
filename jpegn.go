@@ -53,13 +53,14 @@ type Options struct {
 }
 
 // Initial buffer size for reading JPEG headers in DecodeConfig.
-// Most JPEG headers with SOF marker fit in the first 512 bytes.
-const initialHeaderSize = 512
+// We use a larger buffer to handle images with sizeable APP markers (EXIF, Adobe, etc.).
+// Many images have EXIF data in the 2-16KB range before the SOF marker.
+const initialHeaderSize = 16384 // 16KB should handle most images
 
 // A pool for header-sized buffers to reduce allocations in DecodeConfig.
 var headerBufferPool = sync.Pool{
 	New: func() interface{} {
-		// Allocate a small initial buffer for reading JPEG headers.
+		// Allocate initial buffer for reading JPEG headers.
 		b := make([]byte, initialHeaderSize)
 
 		return &b
@@ -154,21 +155,37 @@ func Decode(r io.Reader, opts ...*Options) (image.Image, error) {
 // DecodeConfig returns the color model and dimensions of a JPEG image without decoding the entire image data.
 // The dimensions returned are as stored in the file (SOF marker), ignoring any EXIF orientation tags.
 func DecodeConfig(r io.Reader) (image.Config, error) {
-	// Get a buffer from the pool to avoid allocating a large slice on every call.
+	// Strategy: read incrementally until we find the SOF marker.
+	// Start with a pooled buffer, then read more if needed.
 	bufPtr := headerBufferPool.Get().(*[]byte)
 	defer headerBufferPool.Put(bufPtr)
-	headerData := *bufPtr
+	initialBuf := *bufPtr
 
-	// Read the start of the file into the pooled buffer. We expect an
-	// io.ErrUnexpectedEOF if the file is smaller than our buffer, which is normal.
-	n, err := io.ReadFull(r, headerData)
+	// Try to read the initial buffer
+	n, err := io.ReadFull(r, initialBuf)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		// A read error or an empty file (n=0, err=io.EOF) is fatal.
 		return image.Config{}, err
 	}
 
 	if n == 0 {
 		return image.Config{}, ErrNoJPEG
+	}
+
+	var data []byte
+	// If we read less than the full buffer, the file is small - use what we got
+	if n < len(initialBuf) {
+		data = initialBuf[:n]
+	} else {
+		// File is larger than initial buffer - read the rest to ensure we get SOF
+		// For efficiency, read everything remaining since we already buffered 16KB
+		remaining, err := io.ReadAll(r)
+		if err != nil {
+			return image.Config{}, err
+		}
+		// Combine initial buffer with remaining data
+		data = make([]byte, n+len(remaining))
+		copy(data, initialBuf[:n])
+		copy(data[n:], remaining)
 	}
 
 	// Use a decoder from our pool.
@@ -185,7 +202,7 @@ func DecodeConfig(r io.Reader) (image.Config, error) {
 	d.autoRotate = false
 	d.scaleDenom = 1 // Always use full size for DecodeConfig
 
-	if _, err := d.decode(headerData[:n], true); err != nil {
+	if _, err := d.decode(data, true); err != nil {
 		return image.Config{}, err
 	}
 

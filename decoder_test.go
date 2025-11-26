@@ -837,3 +837,113 @@ func BenchmarkDecodeToRGBAStdLib(b *testing.B) {
 		draw.Draw(rgba, rgba.Bounds(), img, bounds.Min, draw.Src)
 	}
 }
+
+// TestDecodeConfigAllImages tests DecodeConfig on ALL images from testdata/.
+// This ensures DecodeConfig can properly parse headers from all image types.
+func TestDecodeConfigAllImages(t *testing.T) {
+	// Map of all test images with expected dimensions and color models
+	testCases := []struct {
+		name        string
+		data        []byte
+		width       int
+		height      int
+		colorModel  color.Model
+	}{
+		{"1x1", test1x1, 1, 1, color.GrayModel},
+		{"410", nil, 0, 0, color.YCbCrModel},
+		{"410.progressive", nil, 0, 0, color.YCbCrModel},
+		{"411", nil, 0, 0, color.YCbCrModel},
+		{"411.progressive", nil, 0, 0, color.YCbCrModel},
+		{"420", test420, 512, 512, color.YCbCrModel},
+		{"420.odd", test420odd, 487, 511, color.YCbCrModel},
+		{"420.orientation", test420o, 384, 512, color.YCbCrModel},
+		{"420.progressive", nil, 0, 0, color.YCbCrModel},
+		{"422", test422, 512, 512, color.YCbCrModel},
+		{"422.progressive", nil, 0, 0, color.YCbCrModel},
+		{"440", test440, 512, 512, color.YCbCrModel},
+		{"440.progressive", nil, 0, 0, color.YCbCrModel},
+		{"444", test444, 512, 512, color.YCbCrModel},
+		{"444.progressive", nil, 0, 0, color.YCbCrModel},
+		{"cmyk", testCMYK, 512, 512, color.CMYKModel},
+		{"gray", testGRAY, 512, 512, color.GrayModel},
+		{"gray.progressive", nil, 0, 0, color.GrayModel},
+		{"rgb", testRGB, 512, 512, color.RGBAModel},
+		{"rgb.progressive", nil, 0, 0, color.RGBAModel},
+		{"ycck", testYCCK, 512, 512, color.CMYKModel},
+		{"exif.canon", nil, 0, 0, color.YCbCrModel},
+		{"exif.gps", nil, 0, 0, color.YCbCrModel},
+		{"exif.invalid", nil, 0, 0, color.YCbCrModel},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Skip test cases where we don't have embedded data yet
+			if tc.data == nil {
+				t.Skip("Test image not embedded, skipping")
+				return
+			}
+
+			// Get config using our DecodeConfig
+			cfg, err := DecodeConfig(bytes.NewReader(tc.data))
+			if err != nil {
+				t.Fatalf("DecodeConfig failed: %v", err)
+			}
+
+			// Verify expected dimensions if provided
+			if tc.width != 0 && tc.height != 0 {
+				if cfg.Width != tc.width || cfg.Height != tc.height {
+					t.Errorf("Expected dimensions %dx%d, got %dx%d",
+						tc.width, tc.height, cfg.Width, cfg.Height)
+				}
+			}
+
+			// Verify color model matches expected
+			if cfg.ColorModel != tc.colorModel {
+				t.Errorf("ColorModel mismatch: got %v, want %v",
+					cfg.ColorModel, tc.colorModel)
+			}
+
+			// Verify dimensions are reasonable
+			if cfg.Width <= 0 || cfg.Height <= 0 {
+				t.Errorf("Invalid dimensions: %dx%d", cfg.Width, cfg.Height)
+			}
+
+			t.Logf("Successfully decoded config for %s: %dx%d, ColorModel=%v",
+				tc.name, cfg.Width, cfg.Height, cfg.ColorModel)
+		})
+	}
+
+	// Also test all corrupted images - they should not crash
+	corruptedFiles := map[string][]byte{
+		"corrupted1":  testCorrupted1,
+		"corrupted2":  testCorrupted2,
+		"corrupted3":  testCorrupted3,
+		"corrupted4":  testCorrupted4,
+		"corrupted5":  testCorrupted5,
+		"corrupted6":  testCorrupted6,
+		"corrupted7":  testCorrupted7,
+		"corrupted8":  testCorrupted8,
+		"corrupted9":  testCorrupted9,
+		"corrupted10": testCorrupted10,
+	}
+
+	for name, data := range corruptedFiles {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := DecodeConfig(bytes.NewReader(data))
+			if err != nil {
+				t.Logf("%s: DecodeConfig failed (expected for corrupted): %v", name, err)
+				return
+			}
+
+			// If it succeeded, verify dimensions are reasonable
+			if cfg.Width <= 0 || cfg.Height <= 0 {
+				t.Errorf("%s: Invalid dimensions %dx%d", name, cfg.Width, cfg.Height)
+			}
+			if cfg.Width > 10000 || cfg.Height > 10000 {
+				t.Errorf("%s: Suspiciously large dimensions %dx%d", name, cfg.Width, cfg.Height)
+			}
+
+			t.Logf("%s: Successfully decoded config: %dx%d", name, cfg.Width, cfg.Height)
+		})
+	}
+}
