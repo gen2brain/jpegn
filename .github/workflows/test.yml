@@ -18,6 +18,6 @@ jobs:
       with:
         go-version: ${{ matrix.go-version }}
     - name: Test assembly
-      run: go test
+      run: go test -v
     - name: Test generic
-      run: go test -tags noasm
+      run: go test -v -tags noasm
