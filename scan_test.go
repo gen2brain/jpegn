@@ -216,6 +216,7 @@ func BenchmarkGetVLC(b *testing.B) {
 
 	d := decoderPool.Get().(*decoder)
 	d.reset()
+	d.scaleDenom = 1
 	defer func() {
 		d.reset()
 		decoderPool.Put(d)
@@ -231,6 +232,7 @@ func BenchmarkGetVLC(b *testing.B) {
 	// We'll fill it with actual JPEG scan data from the same image.
 	// Find the scan data by decoding again and capturing the state.
 	d.reset()
+	d.scaleDenom = 1
 	d.jpegData = data
 	d.size = len(data)
 	d.pos = 0
