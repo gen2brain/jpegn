@@ -23,7 +23,9 @@ type component struct {
 	id                 int     // Component identifier (e.g., 1 for Y, 2 for Cb, 3 for Cr).
 	ssX, ssY           int     // Subsampling factors for X and Y axes.
 	width, height      int     // Dimensions of this component in pixels.
-	nBlocksX, nBlocksY int     // Dimensions of this component in blocks.
+	nBlocksX, nBlocksY int     // MCU-padded dimensions of this component in blocks (coefficient/pixel buffer stride).
+	blocksPerLine      int     // True (non-padded) full-resolution blocks per line, used for non-interleaved scans.
+	blocksPerCol       int     // True (non-padded) full-resolution block rows, used for non-interleaved scans.
 	stride             int     // The number of bytes from one row of pixels to the next.
 	qtSel              int     // Quantization table selector.
 	acTabSel, dcTabSel int     // Huffman table selectors for AC and DC coefficients.
@@ -1070,6 +1072,16 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 		// image boundaries for non-MCU-aligned dimensions.
 		c.nBlocksX = d.mbWidth * c.ssX
 		c.nBlocksY = d.mbHeight * c.ssY
+
+		// True full-resolution block dimensions (ceil(samples/8)), which can be
+		// smaller than the MCU-padded nBlocksX/Y for non-MCU-aligned images.
+		// Non-interleaved progressive scans contain exactly these many blocks, so
+		// they must iterate this grid (the entropy stream has no padding blocks)
+		// while still addressing the buffer with the nBlocksX stride.
+		fullCompWidth := (origWidth*c.ssX + ssxMax - 1) / ssxMax
+		fullCompHeight := (origHeight*c.ssY + ssyMax - 1) / ssyMax
+		c.blocksPerLine = (fullCompWidth + 7) >> 3
+		c.blocksPerCol = (fullCompHeight + 7) >> 3
 
 		// The stride must account for the scaled block size
 		c.stride = c.nBlocksX * outBlockW

@@ -19,6 +19,9 @@ var test420o []byte
 //go:embed testdata/test.420.odd.jpg
 var test420odd []byte
 
+//go:embed testdata/test.420.progressive.odd.jpg
+var test420progOdd []byte
+
 //go:embed testdata/test.422.jpg
 var test422 []byte
 
@@ -224,6 +227,43 @@ func TestDecodeOddDimensions(t *testing.T) {
 			!isClose(got.Cb, expected.Cb, defaultTolerance) ||
 			!isClose(got.Cr, expected.Cr, defaultTolerance) {
 			t.Errorf("Pixel at %v - got YCbCr %v, want close to YCbCr %v", p, got, expected)
+		}
+	}
+}
+
+// TestDecodeProgressiveOddDimensions guards against a luma desync in
+// non-interleaved progressive scans of non-MCU-aligned 4:2:0 images. The luma
+// component's true blocks-per-line (ceil(width/8)) is smaller than its
+// MCU-padded nBlocksX, so iterating the padded grid consumes one extra block of
+// entropy data per block-row and corrupts everything below the first row.
+func TestDecodeProgressiveOddDimensions(t *testing.T) {
+	img, err := Decode(bytes.NewReader(test420progOdd))
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+
+	ref, err := jpeg.Decode(bytes.NewReader(test420progOdd))
+	if err != nil {
+		t.Fatalf("std jpeg.Decode failed: %v", err)
+	}
+
+	if img.Bounds() != ref.Bounds() {
+		t.Fatalf("Bounds mismatch: got %v, want %v", img.Bounds(), ref.Bounds())
+	}
+
+	my := img.(*image.YCbCr)
+	rf := ref.(*image.YCbCr)
+	b := my.Bounds()
+
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			g := my.YCbCrAt(x, y)
+			w := rf.YCbCrAt(x, y)
+			if !isClose(g.Y, w.Y, defaultTolerance) ||
+				!isClose(g.Cb, w.Cb, defaultTolerance) ||
+				!isClose(g.Cr, w.Cr, defaultTolerance) {
+				t.Fatalf("pixel %d,%d: got YCbCr %v, want close to %v", x, y, g, w)
+			}
 		}
 	}
 }

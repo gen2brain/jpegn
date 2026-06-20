@@ -264,47 +264,51 @@ func (d *decoder) decodeScanProgressiveDC(nCompScan int, scanComp [4]int, ah, al
 	if nCompScan == 1 {
 		compIndex := scanComp[0]
 		c := &d.comp[compIndex]
-		totalBlocks := c.nBlocksX * c.nBlocksY
 
-		// Process all blocks
-		for blockIndex := 0; blockIndex < totalBlocks; blockIndex++ {
-			coeffOffset := blockIndex * 64
+		// A non-interleaved scan contains exactly blocksPerLine*blocksPerCol
+		// blocks in raster order (no MCU padding blocks), but the coefficient
+		// buffer is addressed with the nBlocksX stride.
+	dcBlocks:
+		for by := 0; by < c.blocksPerCol; by++ {
+			for bx := 0; bx < c.blocksPerLine; bx++ {
+				coeffOffset := (by*c.nBlocksX + bx) * 64
 
-			// Bounds check
-			if coeffOffset+64 > len(c.coeffs) {
-				break
-			}
-
-			// Decode DC coefficient
-			if ah == 0 {
-				// First pass - decode DC coefficient difference
-				var diff int
-
-				// Try to decode the DC coefficient
-				dcVLC := d.dcVlcTab[c.dcTabSel]
-				dcVLC8 := d.dcVlcTab8[c.dcTabSel]
-				diff = d.getVLC(dcVLC, dcVLC8, nil)
-
-				// Always update predictor and store coefficient
-				c.dcPred += diff
-				c.coeffs[coeffOffset] = int32(c.dcPred) << al
-				blocksProcessed++
-			} else {
-				// Refinement pass - try to get a bit, getBit will return 0 if no data
-				bit := d.getBit()
-				if bit > 0 {
-					c.coeffs[coeffOffset] |= int32(1 << al)
+				// Bounds check
+				if coeffOffset+64 > len(c.coeffs) {
+					break dcBlocks
 				}
 
-				blocksProcessed++
-			}
+				// Decode DC coefficient
+				if ah == 0 {
+					// First pass - decode DC coefficient difference
+					var diff int
 
-			// Handle restart markers
-			if d.rstInterval > 0 && !d.markerHit {
-				rstCount--
-				if rstCount == 0 {
-					if !d.processRestart(&nextRst, &rstCount, ah, 1, scanComp) {
-						// Restart processing failed
+					// Try to decode the DC coefficient
+					dcVLC := d.dcVlcTab[c.dcTabSel]
+					dcVLC8 := d.dcVlcTab8[c.dcTabSel]
+					diff = d.getVLC(dcVLC, dcVLC8, nil)
+
+					// Always update predictor and store coefficient
+					c.dcPred += diff
+					c.coeffs[coeffOffset] = int32(c.dcPred) << al
+					blocksProcessed++
+				} else {
+					// Refinement pass - try to get a bit, getBit will return 0 if no data
+					bit := d.getBit()
+					if bit > 0 {
+						c.coeffs[coeffOffset] |= int32(1 << al)
+					}
+
+					blocksProcessed++
+				}
+
+				// Handle restart markers
+				if d.rstInterval > 0 && !d.markerHit {
+					rstCount--
+					if rstCount == 0 {
+						if !d.processRestart(&nextRst, &rstCount, ah, 1, scanComp) {
+							// Restart processing failed
+						}
 					}
 				}
 			}
@@ -554,7 +558,13 @@ func (d *decoder) decodeScanProgressiveAC(nCompScan int, scanComp [4]int, ss, se
 	}
 
 	c := &d.comp[scanComp[0]]
-	totalBlocks := c.nBlocksX * c.nBlocksY
+
+	// A non-interleaved AC scan contains exactly blocksPerLine*blocksPerCol
+	// blocks in raster order (no MCU padding blocks). blockIndex is the
+	// sequential position within the scan (used for EOB-run clamping and the
+	// AC-touched map), while the coefficient buffer is addressed with the
+	// nBlocksX stride.
+	totalBlocks := c.blocksPerLine * c.blocksPerCol
 
 	d.ensureACTouchedSize(totalBlocks)
 
@@ -562,61 +572,51 @@ func (d *decoder) decodeScanProgressiveAC(nCompScan int, scanComp [4]int, ss, se
 	blocksExplicitlyProcessed := 0
 	eobRunsApplied := 0
 
-	// Process all blocks using actual component dimensions
-	for blockIndex < totalBlocks {
-		coeffOffset := blockIndex * 64
+acBlocks:
+	for by := 0; by < c.blocksPerCol; by++ {
+		for bx := 0; bx < c.blocksPerLine; bx++ {
+			coeffOffset := (by*c.nBlocksX + bx) * 64
 
-		// Bounds check for coefficient buffer
-		if coeffOffset+64 > len(c.coeffs) {
-			break
-		}
-
-		// Check if we have an active EOB run
-		if d.eobRun > 0 {
-			// Apply EOB run - this block gets EOB processing
-			if ah > 0 {
-				// For refinement passes, we MUST refine existing non-zero coefficients
-				// even if scan data is exhausted. getBit() will return 0 when out of data,
-				// which is the correct behavior per JPEG standard.
-				d.refineBlockEOB(c, coeffOffset, ss, se, al)
+			// Bounds check for coefficient buffer
+			if coeffOffset+64 > len(c.coeffs) {
+				break acBlocks
 			}
-			// For first pass (ah == 0), coefficients remain zero (already initialized)
 
-			d.eobRun--
-			eobRunsApplied++
-
-			// Do NOT use 'continue' here. We must fall through to the restart marker check.
-		} else {
-			// No active EOB run - need to decode this block
-
-			// Check if marker was already hit
-			if false { // BUG FIX: removed markerHit check to allow decoding with padded bits
-				// Marker hit - treat remaining blocks as having EOB
+			// Check if we have an active EOB run
+			if d.eobRun > 0 {
+				// Apply EOB run - this block gets EOB processing
 				if ah > 0 {
-					// Refinement pass - refine existing non-zero coefficients using zero bits
+					// For refinement passes, we MUST refine existing non-zero coefficients
+					// even if scan data is exhausted. getBit() will return 0 when out of data,
+					// which is the correct behavior per JPEG standard.
 					d.refineBlockEOB(c, coeffOffset, ss, se, al)
 				}
+				// For first pass (ah == 0), coefficients remain zero (already initialized)
+
+				d.eobRun--
+				eobRunsApplied++
+
+				// Do NOT use 'continue' here. We must fall through to the restart marker check.
 			} else {
-				// No marker hit - try to decode the block
+				// No active EOB run - try to decode the block.
 				remainingBlocks := totalBlocks - blockIndex
 
-				// Try to decode this block
 				decodeFunc(c, coeffOffset, ss, se, al, blockIndex, remainingBlocks)
 
 				blocksExplicitlyProcessed++
 			}
-		}
 
-		blockIndex++
+			blockIndex++
 
-		// Handle restart markers (checked after every block)
-		if d.rstInterval > 0 && !d.markerHit {
-			rstCount--
-			if rstCount == 0 {
-				// AC scans are always single component (nCompScan=1).
-				if !d.processRestart(&nextRst, &rstCount, ah, 1, scanComp) {
-					// Termination requested (error or EOF).
-					// processRestart already set d.markerHit=true.
+			// Handle restart markers (checked after every block)
+			if d.rstInterval > 0 && !d.markerHit {
+				rstCount--
+				if rstCount == 0 {
+					// AC scans are always single component (nCompScan=1).
+					if !d.processRestart(&nextRst, &rstCount, ah, 1, scanComp) {
+						// Termination requested (error or EOF).
+						// processRestart already set d.markerHit=true.
+					}
 				}
 			}
 		}
