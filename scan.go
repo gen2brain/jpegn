@@ -1,21 +1,9 @@
 package jpegn
 
-func (d *decoder) ensureACTouchedSize(nBlocks int) {
-	if cap(d.acTouched) < nBlocks {
-		d.acTouched = make([]bool, nBlocks)
-	} else {
-		d.acTouched = d.acTouched[:nBlocks]
-	}
-
-	for i := range d.acTouched {
-		d.acTouched[i] = false
-	}
-}
-
 // Entropy Decoding
 
 // getHuffSymbol decodes a Huffman symbol from the bitstream without reading subsequent value bits.
-func (d *decoder) getHuffSymbol(vlc *[65536]vlcCode, blockIndex int, compID int) int {
+func (d *decoder) getHuffSymbol(vlc *[65536]vlcCode) int {
 	// Fast path: buffer has at least 16 bits and no marker hit
 	if d.bufBits >= 16 && !d.markerHit {
 		value16 := int((d.buf >> (d.bufBits - 16)) & 0xFFFF)
@@ -152,11 +140,9 @@ func (d *decoder) decodeScanInternal() error {
 
 	qtNeeded := 0
 	var scanComp [4]int
-	var compIDs []int
 
 	for i := 0; i < nCompScan; i++ {
 		scanID := int(d.jpegData[d.pos])
-		compIDs = append(compIDs, scanID)
 
 		found := false
 
@@ -265,9 +251,8 @@ func (d *decoder) decodeScanProgressiveDC(nCompScan int, scanComp [4]int, ah, al
 		compIndex := scanComp[0]
 		c := &d.comp[compIndex]
 
-		// A non-interleaved scan contains exactly blocksPerLine*blocksPerCol
-		// blocks in raster order (no MCU padding blocks), but the coefficient
-		// buffer is addressed with the nBlocksX stride.
+		// Non-interleaved: iterate the true block raster (no MCU padding),
+		// addressing the buffer with the nBlocksX stride.
 	dcBlocks:
 		for by := 0; by < c.blocksPerCol; by++ {
 			for bx := 0; bx < c.blocksPerLine; bx++ {
@@ -353,18 +338,10 @@ func (d *decoder) decodeScanProgressiveDC(nCompScan int, scanComp [4]int, ah, al
 								// No data left - use diff=0
 								diff = 0
 							} else {
-								// Save current predictor in case decode corrupts it
-								oldPred := c.dcPred
-
 								// Try to decode the DC coefficient
 								dcVLC := d.dcVlcTab[c.dcTabSel]
 								dcVLC8 := d.dcVlcTab8[c.dcTabSel]
 								diff = d.getVLC(dcVLC, dcVLC8, nil)
-
-								// If getVLC corrupted the predictor (shouldn't happen but check anyway)
-								if c.dcPred != oldPred {
-									c.dcPred = oldPred // Restore it
-								}
 							}
 
 							// Update predictor and store coefficient
@@ -559,14 +536,10 @@ func (d *decoder) decodeScanProgressiveAC(nCompScan int, scanComp [4]int, ss, se
 
 	c := &d.comp[scanComp[0]]
 
-	// A non-interleaved AC scan contains exactly blocksPerLine*blocksPerCol
-	// blocks in raster order (no MCU padding blocks). blockIndex is the
-	// sequential position within the scan (used for EOB-run clamping and the
-	// AC-touched map), while the coefficient buffer is addressed with the
+	// Non-interleaved: iterate the true block raster (no MCU padding). blockIndex
+	// is the sequential scan position (for EOB-run clamping); the buffer uses the
 	// nBlocksX stride.
 	totalBlocks := c.blocksPerLine * c.blocksPerCol
-
-	d.ensureACTouchedSize(totalBlocks)
 
 	blockIndex := 0
 	blocksExplicitlyProcessed := 0
@@ -659,10 +632,10 @@ func (d *decoder) decodeBlockACFirst(c *component, offset, ss, se, al, blockInde
 				symbol = int(entry >> 8)
 			} else {
 				// Code longer than 8 bits, use slow path
-				symbol = d.getHuffSymbol(acVLC, blockIndex, c.id)
+				symbol = d.getHuffSymbol(acVLC)
 			}
 		} else {
-			symbol = d.getHuffSymbol(acVLC, blockIndex, c.id)
+			symbol = d.getHuffSymbol(acVLC)
 		}
 
 		s := symbol & 0x0F
@@ -716,10 +689,6 @@ func (d *decoder) decodeBlockACFirst(c *component, offset, ss, se, al, blockInde
 		nat := zz[k]
 		coefs[nat] = int32(val << al)
 
-		if d.acTouched != nil && blockIndex < len(d.acTouched) {
-			d.acTouched[blockIndex] = true
-		}
-
 		k++
 	}
 }
@@ -739,16 +708,6 @@ func (d *decoder) decodeBlockACRefine(c *component, offset, ss, se, al, blockInd
 	if err := d.refineBlock(coefs, acVLC, acVLC8, int32(ss), int32(se), delta, blockIndex, remainingBlocks, false); err != nil {
 		// Error handling (e.g., if refineBlock returned an error, though currently it only returns nil)
 		return
-	}
-
-	if d.acTouched != nil && blockIndex < len(d.acTouched) {
-		// Check if any coefficients in the spectral range were modified
-		for k := ss; k <= se; k++ {
-			if coefs[zz[k]] != 0 {
-				d.acTouched[blockIndex] = true
-				break
-			}
-		}
 	}
 }
 
@@ -776,10 +735,10 @@ loop:
 				d.bufBits -= codeLen
 				symbol = int(entry >> 8)
 			} else {
-				symbol = d.getHuffSymbol(vlc, blockIndex, -1)
+				symbol = d.getHuffSymbol(vlc)
 			}
 		} else {
-			symbol = d.getHuffSymbol(vlc, blockIndex, -1)
+			symbol = d.getHuffSymbol(vlc)
 		}
 
 		// If getHuffSymbol hit a marker, it might return 0 or a partial symbol. We proceed.
@@ -1001,22 +960,10 @@ func (d *decoder) postProcessProgressive() error {
 				}
 
 				// Clear work block and dequantize
-				d.block = [64]int32{} // Fast zero initialization
+				// Branchless dequant; writing all 64 also zero-fills, no clear needed.
 				coefs := c.coeffs[coeffOffset : coeffOffset+64]
-				// Unrolled loop for better performance
-				for k := 0; k < 64; k += 4 {
-					if c0 := coefs[k]; c0 != 0 {
-						d.block[k] = c0 * int32(qt[k])
-					}
-					if c1 := coefs[k+1]; c1 != 0 {
-						d.block[k+1] = c1 * int32(qt[k+1])
-					}
-					if c2 := coefs[k+2]; c2 != 0 {
-						d.block[k+2] = c2 * int32(qt[k+2])
-					}
-					if c3 := coefs[k+3]; c3 != 0 {
-						d.block[k+3] = c3 * int32(qt[k+3])
-					}
+				for k := 0; k < 64; k++ {
+					d.block[k] = coefs[k] * int32(qt[k])
 				}
 
 				// Apply IDCT to pixel buffer

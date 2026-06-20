@@ -231,11 +231,8 @@ func TestDecodeOddDimensions(t *testing.T) {
 	}
 }
 
-// TestDecodeProgressiveOddDimensions guards against a luma desync in
-// non-interleaved progressive scans of non-MCU-aligned 4:2:0 images. The luma
-// component's true blocks-per-line (ceil(width/8)) is smaller than its
-// MCU-padded nBlocksX, so iterating the padded grid consumes one extra block of
-// entropy data per block-row and corrupts everything below the first row.
+// TestDecodeProgressiveOddDimensions guards against luma desync in non-interleaved
+// progressive scans of non-MCU-aligned 4:2:0 images (true blocks/line < nBlocksX).
 func TestDecodeProgressiveOddDimensions(t *testing.T) {
 	img, err := Decode(bytes.NewReader(test420progOdd))
 	if err != nil {
@@ -265,6 +262,32 @@ func TestDecodeProgressiveOddDimensions(t *testing.T) {
 				t.Fatalf("pixel %d,%d: got YCbCr %v, want close to %v", x, y, g, w)
 			}
 		}
+	}
+}
+
+// TestDecodeHugeDimensions verifies a corrupt oversized SOF is rejected, not OOM'd.
+func TestDecodeHugeDimensions(t *testing.T) {
+	// SOI + SOF0 declaring 65535x65535, 1 component.
+	data := []byte{
+		0xFF, 0xD8, // SOI
+		0xFF, 0xC0, // SOF0
+		0x00, 0x0B, // length 11
+		0x08,       // precision 8
+		0xFF, 0xFF, // height 65535
+		0xFF, 0xFF, // width 65535
+		0x01,             // 1 component
+		0x01, 0x11, 0x00, // component 1
+		0xFF, 0xD9, // EOI
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Decode panicked on huge dimensions: %v", r)
+		}
+	}()
+
+	if _, err := Decode(bytes.NewReader(data)); err == nil {
+		t.Fatal("expected an error for an oversized image, got nil")
 	}
 }
 

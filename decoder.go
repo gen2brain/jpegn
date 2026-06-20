@@ -23,9 +23,9 @@ type component struct {
 	id                 int     // Component identifier (e.g., 1 for Y, 2 for Cb, 3 for Cr).
 	ssX, ssY           int     // Subsampling factors for X and Y axes.
 	width, height      int     // Dimensions of this component in pixels.
-	nBlocksX, nBlocksY int     // MCU-padded dimensions of this component in blocks (coefficient/pixel buffer stride).
-	blocksPerLine      int     // True (non-padded) full-resolution blocks per line, used for non-interleaved scans.
-	blocksPerCol       int     // True (non-padded) full-resolution block rows, used for non-interleaved scans.
+	nBlocksX, nBlocksY int     // MCU-padded dimensions in blocks (buffer stride).
+	blocksPerLine      int     // True blocks per line, for non-interleaved scans.
+	blocksPerCol       int     // True block rows, for non-interleaved scans.
 	stride             int     // The number of bytes from one row of pixels to the next.
 	qtSel              int     // Quantization table selector.
 	acTabSel, dcTabSel int     // Huffman table selectors for AC and DC coefficients.
@@ -70,11 +70,14 @@ type decoder struct {
 	adobeTransform      uint8                     // Adobe color transform: 0=Unknown(RGB/CMYK), 1=YCbCr, 2=YCCK.
 	scaleDenom          int                       // IDCT scaling denominator: 1 (no scaling), 2 (1/2), 4 (1/4), 8 (1/8).
 
-	acTouched []bool // reused per scan for stats
 }
 
 // errDecode is used for internal panics during the hot decoding path.
 type errDecode struct{ error }
+
+// maxImagePixels caps the SOF pixel count to avoid huge allocations from corrupt
+// dimensions, while staying well above any real image (~268 megapixels).
+const maxImagePixels = 1 << 28
 
 // Exif contains metadata extracted from a JPEG image's EXIF data.
 type Exif struct {
@@ -911,6 +914,10 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 		return ErrSyntax
 	}
 
+	if int64(d.width)*int64(d.height) > maxImagePixels {
+		return ErrUnsupported
+	}
+
 	d.ncomp = int(d.jpegData[d.pos+5])
 	if err := d.skip(6); err != nil {
 		return err
@@ -1073,11 +1080,8 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 		c.nBlocksX = d.mbWidth * c.ssX
 		c.nBlocksY = d.mbHeight * c.ssY
 
-		// True full-resolution block dimensions (ceil(samples/8)), which can be
-		// smaller than the MCU-padded nBlocksX/Y for non-MCU-aligned images.
-		// Non-interleaved progressive scans contain exactly these many blocks, so
-		// they must iterate this grid (the entropy stream has no padding blocks)
-		// while still addressing the buffer with the nBlocksX stride.
+		// True (non-MCU-padded) block dimensions; non-interleaved scans iterate
+		// this grid while still addressing the buffer with the nBlocksX stride.
 		fullCompWidth := (origWidth*c.ssX + ssxMax - 1) / ssxMax
 		fullCompHeight := (origHeight*c.ssY + ssyMax - 1) / ssyMax
 		c.blocksPerLine = (fullCompWidth + 7) >> 3

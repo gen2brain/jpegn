@@ -99,49 +99,6 @@ func (d *decoder) showBits(bits int) int {
 	return val
 }
 
-// ensureBits tries to fill the buffer to have at least n bits available.
-// This helps hot paths avoid expensive showBits calls.
-func (d *decoder) ensureBits(n int) {
-	if d.bufBits >= n || d.markerHit {
-		return
-	}
-
-	// Mask existing bits
-	if d.bufBits < 64 {
-		mask := (uint64(1) << d.bufBits) - 1
-		d.buf &= mask
-	}
-
-	// Fill up to 56 bits max (to avoid overflow when shifting by 8)
-	for d.bufBits < 56 && d.size > 0 && !d.markerHit {
-		b := d.jpegData[d.pos]
-		d.pos++
-		d.size--
-
-		if b == 0xFF {
-			if d.size <= 0 {
-				// Lone 0xFF at EOF, treat as data
-			} else {
-				b2 := d.jpegData[d.pos]
-				if b2 == 0x00 {
-					// Stuffed byte
-					d.pos++
-					d.size--
-				} else {
-					// Marker detected, rewind
-					d.pos--
-					d.size++
-					d.markerHit = true
-					break
-				}
-			}
-		}
-
-		d.buf = (d.buf << 8) | uint64(b)
-		d.bufBits += 8
-	}
-}
-
 // skipBits consumes 'bits' number of bits from the bitstream.
 func (d *decoder) skipBits(bits int) {
 	if d.bufBits < bits {
