@@ -34,6 +34,87 @@ func makeRandGray(w, h int) *component {
 	return makeRandComponent(w, h)
 }
 
+// makeRandComponentStride builds a component whose row stride exceeds its width,
+// mirroring a full-resolution component of a non-MCU-aligned image. The padding
+// bytes are filled with a sentinel so a stride-unaware conversion produces
+// visibly wrong output.
+func makeRandComponentStride(w, h, stride int) *component {
+	pix := make([]byte, stride*h)
+	r := rand.New(rand.NewSource(int64(w*h + stride)))
+	for row := 0; row < h; row++ {
+		for x := 0; x < stride; x++ {
+			if x < w {
+				pix[row*stride+x] = byte(r.Intn(256))
+			} else {
+				pix[row*stride+x] = 0xAA
+			}
+		}
+	}
+
+	return &component{pixels: pix, stride: stride, width: w, height: h}
+}
+
+// TestRGBAStrideHandling verifies the SIMD conversions honor component strides
+// that differ from the image width (the odd-dimension case), matching the
+// stride-aware scalar reference.
+func TestRGBAStrideHandling(t *testing.T) {
+	cases := []struct{ w, h, stride int }{
+		{487, 17, 496}, // luma-like padding, width not a multiple of 16/32
+		{17, 5, 32},
+		{33, 3, 48},
+		{1, 1, 8},
+		{100, 8, 128},
+	}
+
+	for _, tc := range cases {
+		name := fmt.Sprintf("%dx%d_stride%d", tc.w, tc.h, tc.stride)
+		t.Run(name, func(t *testing.T) {
+			t.Run("YCbCr", func(t *testing.T) {
+				y := makeRandComponentStride(tc.w, tc.h, tc.stride)
+				cb := makeRandComponentStride(tc.w, tc.h, tc.stride)
+				cr := makeRandComponentStride(tc.w, tc.h, tc.stride)
+				got := make([]byte, tc.w*tc.h*4)
+				want := make([]byte, tc.w*tc.h*4)
+
+				yCbCrToRGBA(y, cb, cr, got, tc.w, tc.h)
+				yCbCrToRGBAScalar(y, cb, cr, want, tc.w, tc.h)
+
+				if !bytes.Equal(got, want) {
+					t.Fatalf("yCbCrToRGBA mismatch with stride != width\n%s", findFirstDiff(got, want, tc.w))
+				}
+			})
+
+			t.Run("RGB", func(t *testing.T) {
+				r := makeRandComponentStride(tc.w, tc.h, tc.stride)
+				g := makeRandComponentStride(tc.w, tc.h, tc.stride)
+				b := makeRandComponentStride(tc.w, tc.h, tc.stride)
+				got := make([]byte, tc.w*tc.h*4)
+				want := make([]byte, tc.w*tc.h*4)
+
+				rgbToRGBA(r, g, b, got, tc.w, tc.h)
+				rgbToRGBAScalar(r, g, b, want, tc.w, tc.h)
+
+				if !bytes.Equal(got, want) {
+					t.Fatalf("rgbToRGBA mismatch with stride != width\n%s", findFirstDiff(got, want, tc.w))
+				}
+			})
+
+			t.Run("Gray", func(t *testing.T) {
+				c := makeRandComponentStride(tc.w, tc.h, tc.stride)
+				got := make([]byte, tc.w*tc.h*4)
+				want := make([]byte, tc.w*tc.h*4)
+
+				grayToRGBA(c, got, tc.w, tc.h)
+				grayToRGBAScalar(c, want, tc.w, tc.h)
+
+				if !bytes.Equal(got, want) {
+					t.Fatalf("grayToRGBA mismatch with stride != width\n%s", findFirstDiff(got, want, tc.w))
+				}
+			})
+		})
+	}
+}
+
 // setupBenchmarkComponents creates component structs with dummy data for benchmarking.
 func setupBenchmarkComponents(b *testing.B, w, h int, ncomp int) ([]*component, []byte) {
 	b.Helper()
