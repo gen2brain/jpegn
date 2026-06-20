@@ -231,6 +231,38 @@ func TestDecodeOddDimensions(t *testing.T) {
 	}
 }
 
+// TestDecodeTruncatedMarkers verifies that marker segments whose declared length
+// exceeds the available data are rejected gracefully rather than panicking.
+func TestDecodeTruncatedMarkers(t *testing.T) {
+	soi := []byte{0xFF, 0xD8}
+	cases := map[string][]byte{
+		// SOF0 declaring an 11-byte segment but truncated mid-header.
+		"truncSOF": append(append([]byte{}, soi...), 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00),
+		// DHT declaring a long segment but truncated before the counts.
+		"truncDHT": append(append([]byte{}, soi...), 0xFF, 0xC4, 0x00, 0x20, 0x00),
+		// DRI declaring 4 bytes but truncated before the interval.
+		"truncDRI": append(append([]byte{}, soi...), 0xFF, 0xDD, 0x00, 0x04),
+		// SOS declaring a header but truncated before the component data.
+		"truncSOS": append(append([]byte{}, soi...), 0xFF, 0xDA, 0x00, 0x0C, 0x03),
+		// DHT with oversubscribed counts (4 codes of length 1).
+		"badHuff": append(append([]byte{}, soi...), 0xFF, 0xC4, 0x00, 0x14, 0x00, 0x04,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3),
+	}
+
+	for name, data := range cases {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("Decode panicked on %s: %v", name, r)
+				}
+			}()
+			// We only require that it does not panic; an error is expected.
+			_, _ = Decode(bytes.NewReader(data))
+			_, _ = DecodeConfig(bytes.NewReader(data))
+		})
+	}
+}
+
 // TestDecodeProgressiveOddDimensions guards against luma desync in non-interleaved
 // progressive scans of non-MCU-aligned 4:2:0 images (true blocks/line < nBlocksX).
 func TestDecodeProgressiveOddDimensions(t *testing.T) {

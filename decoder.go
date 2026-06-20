@@ -562,7 +562,7 @@ func (d *decoder) decodeAPP1() error {
 	}
 
 	// Check for "Exif\0\0" signature (6 bytes).
-	if d.length >= 6 &&
+	if d.length >= 6 && d.size >= 6 &&
 		d.jpegData[d.pos+0] == 'E' &&
 		d.jpegData[d.pos+1] == 'x' &&
 		d.jpegData[d.pos+2] == 'i' &&
@@ -702,7 +702,7 @@ func (d *decoder) decodeAPP14() error {
 	}
 
 	// Check for the "Adobe" signature.
-	if d.length >= 12 &&
+	if d.length >= 12 && d.size >= 12 &&
 		d.jpegData[d.pos+0] == 'A' &&
 		d.jpegData[d.pos+1] == 'd' &&
 		d.jpegData[d.pos+2] == 'o' &&
@@ -737,6 +737,12 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 		return ErrSyntax
 	}
 
+	// Ensure the fixed 6-byte header (precision, dimensions, component count) is
+	// actually present, not just declared (the file may be truncated).
+	if d.size < 6 {
+		return ErrSyntax
+	}
+
 	if d.jpegData[d.pos] != 8 {
 		return ErrUnsupported // Precision must be 8-bit.
 	}
@@ -748,6 +754,15 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 	}
 
 	if int64(d.width)*int64(d.height) > maxImagePixels {
+		return ErrUnsupported
+	}
+
+	// Cross-check declared dimensions against the available input: a genuine
+	// image needs entropy data roughly proportional to its pixel count, so a
+	// pixel count far exceeding the file size means a corrupt SOF that would
+	// otherwise trigger a huge buffer allocation. Skipped for config-only decodes,
+	// which intentionally read just a header prefix and never allocate pixels.
+	if !configOnly && int64(d.width)*int64(d.height) > int64(len(d.jpegData))*1024 {
 		return ErrUnsupported
 	}
 
@@ -763,6 +778,11 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 	}
 
 	if d.length < (d.ncomp * 3) {
+		return ErrSyntax
+	}
+
+	// Ensure the per-component descriptors are present.
+	if d.size < d.ncomp*3 {
 		return ErrSyntax
 	}
 
@@ -984,6 +1004,11 @@ func (d *decoder) decodeDHT() error {
 	}
 
 	for d.length >= 17 {
+		// The 17-byte table header (class/id + 16 counts) must be present.
+		if d.size < 17 {
+			return ErrSyntax
+		}
+
 		infoByte := int(d.jpegData[d.pos])
 
 		// Parse Tc (Table Class) and Th (Table Destination Identifier).
@@ -1022,7 +1047,7 @@ func (d *decoder) decodeDHT() error {
 			n += int(num)
 		}
 
-		if n > 256 || n > d.length {
+		if n > 256 || n > d.length || n > d.size {
 			return ErrSyntax
 		}
 
@@ -1111,7 +1136,7 @@ func (d *decoder) decodeDRI() error {
 		return err
 	}
 
-	if d.length < 2 {
+	if d.length < 2 || d.size < 2 {
 		return ErrSyntax
 	}
 

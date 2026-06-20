@@ -66,6 +66,12 @@ func buildHuff(t *huffTable, counts *[16]uint8, values []byte) error {
 	for l := 1; l <= 16; l++ {
 		cnt := int(counts[l-1])
 		if cnt > 0 {
+			// Reject oversubscribed tables (Kraft inequality) before generating
+			// any codes, so the LUT fill below cannot index out of range.
+			if code+cnt > (1 << l) {
+				return ErrSyntax
+			}
+
 			// symbol index for code c of length l is c + (k - code).
 			t.delta[l] = int32(k) - int32(code)
 
@@ -84,11 +90,6 @@ func buildHuff(t *huffTable, counts *[16]uint8, values []byte) error {
 				code += cnt
 				k += cnt
 				t.maxcode[l] = int32(code - 1)
-			}
-
-			// Kraft inequality: codes must not overflow the available space.
-			if code > (1 << l) {
-				return ErrSyntax
 			}
 		}
 

@@ -126,8 +126,18 @@ func (d *decoder) decodeScanInternal() error {
 		return err
 	}
 
+	if d.size < 1 {
+		return ErrSyntax
+	}
+
 	nCompScan := int(d.jpegData[d.pos])
 	if d.length < (4+2*nCompScan) || nCompScan < 1 || nCompScan > 4 {
+		return ErrSyntax
+	}
+
+	// The fixed SOS header (count + 2 bytes/component + ss/se/ah/al) must be
+	// present, not merely declared, before indexing into it.
+	if d.size < 4+2*nCompScan {
 		return ErrSyntax
 	}
 
