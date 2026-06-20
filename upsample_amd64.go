@@ -36,6 +36,12 @@ func upsampleNearestNeighbor(c *component, width, height int) {
 		origWidth := c.width
 		origHeight := c.height
 
+		if origWidth <= 0 || origHeight <= 0 || len(origPixels) == 0 {
+			upsampleNearestNeighborScalar(c, width, height)
+
+			return
+		}
+
 		out := make([]byte, tempWidth*tempHeight)
 
 		c.pixels = out

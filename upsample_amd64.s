@@ -3,7 +3,7 @@
 #include "textflag.h"
 
 // upsampleNearestNeighborAVX2 performs a 2x2 nearest neighbor upsampling using AVX2.
-TEXT ·upsampleNearestNeighborAVX2(SB), NOSPLIT, $0-56
+TEXT ·upsampleNearestNeighborAVX2(SB), NOSPLIT, $0-48
 	MOVQ src+0(FP), SI
 	MOVQ dst+8(FP), DI
 	MOVQ srcW+16(FP), R8
