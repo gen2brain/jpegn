@@ -40,13 +40,13 @@ CONST_YMM(const_w2mw6, 1568) // w2-w6
 CONST_YMM(const_w2pw6, 3784) // w2+w6
 
 // Other constants for scaling, rounding, and level-shifting.
+// const_128 serves three roles that all share the value 128: the rotation rounding
+// bias (>> 8), the Pass 1 rounding bias, and the final level shift.
 CONST_YMM(const_181, 181)
 CONST_YMM(const_128, 128)
 CONST_YMM(const_4, 4)              // P2 intermediate rounding (for >> 3)
-CONST_YMM(const_round_pass1, 128)  // P1 (rowIdct) rounding for >> 8
 CONST_YMM(const_round_pass2, 8192) // P2 (colIdct) rounding for >> 14
 CONST_YMM(const_round_col, 32)     // For DC-only path
-CONST_YMM(const_level_shift, 128)
 CONST_YMM(const_zero, 0)
 
 // Mask to isolate AC coefficients by zeroing out the DC coefficient.
@@ -72,7 +72,7 @@ GLOBL mask_ac_coeffs<>(SB), RODATA|NOPTR, $32
 // func idctAVX2(in *[64]int32, out []byte, offset int, stride int)
 TEXT ·idctAVX2(SB), NOSPLIT, $16-48
 	MOVQ in+0(FP), SI       // SI = input block pointer
-	MOVQ out_data+8(FP), DI // DI = output slice data pointer
+	MOVQ out_base+8(FP), DI // DI = output slice data pointer
 	MOVQ offset+32(FP), R8  // R8 = output offset
 	MOVQ stride+40(FP), CX  // CX = output stride
 	ADDQ R8, DI             // DI = effective output start address
@@ -120,7 +120,7 @@ TEXT ·idctAVX2(SB), NOSPLIT, $16-48
 	// Setup: Scaling (<< 11) and rounding (+128).
 	VPSLLD $11, Y12, Y12                   // x1 << 11
 	VPSLLD $11, Y8, Y8                     // x0 << 11
-	VPADDD const_round_pass1<>(SB), Y8, Y8 // x0 + 128
+	VPADDD const_128<>(SB), Y8, Y8 // x0 + 128
 
 	// Stage 1:
 	VPADDD  Y15, Y9, Y0; VPADDD  Y11, Y13, Y1
@@ -254,7 +254,7 @@ TEXT ·idctAVX2(SB), NOSPLIT, $16-48
 	VMOVDQU Y1, Y10                      // Save x1 in Y10
 	VMOVDQU Y3, Y12                      // Save x6 in Y12
 	VMOVDQU Y5, Y13                      // Save x7 (Y5) to Y13.
-	VMOVDQU const_level_shift<>(SB), Y11 // Load level shift constant
+	VMOVDQU const_128<>(SB), Y11 // Load level shift constant
 
 	// Calculate sums into Y0-Y3.
 	VPADDD Y13, Y10, Y0 // Y0 = x7+x1 (use saved Y13)
@@ -378,7 +378,7 @@ dc_only_path:
 	VPSLLD $3, X0, X0
 	VPADDD const_round_col<>(SB), X0, X0
 	VPSRAD $6, X0, X0
-	VPADDD const_level_shift<>(SB), X0, X0
+	VPADDD const_128<>(SB), X0, X0
 
 	// Pack to a single byte with saturation.
 	VMOVDQU   const_zero<>(SB), X1

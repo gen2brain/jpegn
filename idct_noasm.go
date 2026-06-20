@@ -197,6 +197,20 @@ func colIdct(blk *[64]int32, offset int, out []byte, outOffset int, stride int) 
 	out[currentOutOffset] = clamp(((x7 - x1) >> 14) + 128)
 }
 
+// idctIterative performs a full 8x8 2D IDCT using the iterative scalar approach.
+// It is the shared fallback used by every architecture when the assembly path's
+// bounds checks fail, and the primary implementation on architectures without
+// an assembly IDCT.
+func idctIterative(blk *[64]int32, out []byte, outOffset int, stride int) {
+	for i := 0; i < 64; i += 8 {
+		rowIdct(blk, i)
+	}
+
+	for i := 0; i < 8; i++ {
+		colIdct(blk, i, out, outOffset+i, stride)
+	}
+}
+
 // idct8x8To1x1 performs DC-only IDCT for 1/8 scaling (produces 1x1 output from 8x8 DCT block)
 func idct8x8To1x1(blk *[64]int32, out []byte, outOffset int, stride int) {
 	// For 1/8 scaling, only the DC coefficient matters

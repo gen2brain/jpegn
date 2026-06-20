@@ -49,7 +49,7 @@ CONST32(const_8192, 8192)
 TEXT ·idctNEON(SB), NOSPLIT, $0-48
 	// Load function arguments from the stack into general-purpose registers.
 	MOVD in+0(FP), R0       // R0 = input block pointer (*[64]int32)
-	MOVD out_data+8(FP), R1 // R1 = output slice data pointer (&out[0])
+	MOVD out_base+8(FP), R1 // R1 = output slice data pointer (&out[0])
 	MOVD offset+32(FP), R2  // R2 = output offset
 	MOVD stride+40(FP), R3  // R3 = output stride
 	ADD  R2, R1, R1         // R1 = &out[0] + offset (effective start address)

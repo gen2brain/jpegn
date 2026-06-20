@@ -18,14 +18,3 @@ func idct(blk *[64]int32, out []byte, outOffset int, stride int) {
 	// Fallback to pure Go if bounds check fails (e.g., corrupted JPEG dimensions/offsets).
 	idctIterative(blk, out, outOffset, stride)
 }
-
-// idctIterative is a helper for the iterative fallback (using pure Go functions).
-func idctIterative(blk *[64]int32, out []byte, outOffset int, stride int) {
-	for i := 0; i < 64; i += 8 {
-		rowIdct(blk, i)
-	}
-
-	for i := 0; i < 8; i++ {
-		colIdct(blk, i, out, outOffset+i, stride)
-	}
-}
