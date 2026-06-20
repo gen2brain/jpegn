@@ -158,30 +158,25 @@ func (d *decoder) getBits(bits int) int {
 
 // getBit reads a single bit from the bitstream. Used for successive approximation.
 // Returns 0 or 1. Treats missing bits (due to marker hit or EOF) as 0.
+// The fast path is kept small so it inlines into the refinement hot loops.
 func (d *decoder) getBit() int {
-	// Fast path for the most common case in refinement scans.
 	if d.bufBits > 0 && !d.markerHit {
 		d.bufBits--
 
 		return int((d.buf >> d.bufBits) & 1)
 	}
 
-	// Slow path (handles refill and marker semantics).
+	return d.getBitSlow()
+}
 
-	// Ensure at least 1 bit (and check marker semantics).
-	// showBits handles refilling if needed and possible.
+// getBitSlow handles buffer refill and marker/EOF semantics for getBit.
+func (d *decoder) getBitSlow() int {
 	d.showBits(1)
 
 	if d.bufBits < 1 {
-		// If the buffer is underfilled.
+		// Buffer underfilled. Per the JPEG spec for refinement, a marker hit or
+		// EOF means the missing bits are treated as 0.
 		if d.markerHit || d.size == 0 {
-			// Marker hit or EOF, and buffer empty.
-			// Per JPEG spec for refinement, treat missing bits as 0.
-			if d.size == 0 && !d.markerHit {
-				// Don't set markerHit here - just return 0
-				// This allows progressive scans to continue processing remaining blocks
-			}
-
 			return 0
 		}
 
@@ -189,7 +184,6 @@ func (d *decoder) getBit() int {
 		d.panic(ErrSyntax)
 	}
 
-	// We have at least 1 bit. Consume it.
 	d.bufBits--
 
 	return int((d.buf >> d.bufBits) & 1)

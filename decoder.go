@@ -594,6 +594,8 @@ func (d *decoder) resetForConfig() {
 	// Save pointers to the tables.
 	dcVlcTmp := d.dcVlcTab
 	acVlcTmp := d.acVlcTab
+	dcVlc8Tmp := d.dcVlcTab8
+	acVlc8Tmp := d.acVlcTab8
 	qtabTmp := d.qtab
 
 	// Zero the struct. This clears references (jpegData, pixels, etc.) allowing GC, and resets all state variables.
@@ -602,6 +604,8 @@ func (d *decoder) resetForConfig() {
 	// Restore pointers to the tables.
 	d.dcVlcTab = dcVlcTmp
 	d.acVlcTab = acVlcTmp
+	d.dcVlcTab8 = dcVlc8Tmp
+	d.acVlcTab8 = acVlc8Tmp
 	d.qtab = qtabTmp
 }
 
@@ -610,6 +614,8 @@ func (d *decoder) reset() {
 	// Save pointers to the tables.
 	dcVlcTmp := d.dcVlcTab
 	acVlcTmp := d.acVlcTab
+	dcVlc8Tmp := d.dcVlcTab8
+	acVlc8Tmp := d.acVlcTab8
 	qtabTmp := d.qtab
 
 	// Zero the struct. This clears references (jpegData, pixels, etc.) allowing GC, and resets all state variables.
@@ -618,6 +624,8 @@ func (d *decoder) reset() {
 	// Restore pointers to the tables.
 	d.dcVlcTab = dcVlcTmp
 	d.acVlcTab = acVlcTmp
+	d.dcVlcTab8 = dcVlc8Tmp
+	d.acVlcTab8 = acVlc8Tmp
 	d.qtab = qtabTmp
 
 	// Clear the quantization tables to prevent state leakage between decodes.
@@ -631,20 +639,21 @@ func (d *decoder) reset() {
 	*d.dcVlcTab[1] = defaultDCChromaVLC
 	*d.acVlcTab[0] = defaultACLumaVLC
 	*d.acVlcTab[1] = defaultACChromaVLC
+	*d.dcVlcTab8[0] = defaultDCLumaVLC8
+	*d.dcVlcTab8[1] = defaultDCChromaVLC8
+	*d.acVlcTab8[0] = defaultACLumaVLC8
+	*d.acVlcTab8[1] = defaultACChromaVLC8
 
-	// Clear non-default tables (Index 2 and 3) for safety.
-	for i := range d.dcVlcTab[2] {
-		d.dcVlcTab[2][i] = vlcCode{}
-	}
-	for i := range d.dcVlcTab[3] {
-		d.dcVlcTab[3][i] = vlcCode{}
-	}
-	for i := range d.acVlcTab[2] {
-		d.acVlcTab[2][i] = vlcCode{}
-	}
-	for i := range d.acVlcTab[3] {
-		d.acVlcTab[3][i] = vlcCode{}
-	}
+	// Clear non-default tables (Index 2 and 3) for safety. Whole-array
+	// assignment compiles to a fast memclr.
+	*d.dcVlcTab[2] = [65536]vlcCode{}
+	*d.dcVlcTab[3] = [65536]vlcCode{}
+	*d.acVlcTab[2] = [65536]vlcCode{}
+	*d.acVlcTab[3] = [65536]vlcCode{}
+	*d.dcVlcTab8[2] = [256]vlcCode8{}
+	*d.dcVlcTab8[3] = [256]vlcCode8{}
+	*d.acVlcTab8[2] = [256]vlcCode8{}
+	*d.acVlcTab8[3] = [256]vlcCode8{}
 }
 
 // alignAndRewind aligns the bitstream and synchronizes d.pos with the buffer.
@@ -1214,12 +1223,16 @@ func (d *decoder) decodeDHT() error {
 			return ErrUnsupported
 		}
 
-		// Select the correct VLC table (DC or AC).
+		// Select the correct VLC tables (DC or AC): the 16-bit lookup and its
+		// 8-bit fast-path counterpart.
 		var vlc *[65536]vlcCode
+		var vlc8 *[256]vlcCode8
 		if tc == 0 {
 			vlc = d.dcVlcTab[th]
+			vlc8 = d.dcVlcTab8[th]
 		} else {
 			vlc = d.acVlcTab[th]
+			vlc8 = d.acVlcTab8[th]
 		}
 
 		// Read counts of codes for each length (1-16 bits).
@@ -1246,6 +1259,10 @@ func (d *decoder) decodeDHT() error {
 		// Build the lookup table using canonical Huffman codes.
 		// buildVlcTable handles clearing the table (Pooling) and validation.
 		if err := buildVlcTable(vlc, &counts, values); err != nil {
+			return err
+		}
+
+		if err := buildVlcTable8(vlc8, &counts, values); err != nil {
 			return err
 		}
 
