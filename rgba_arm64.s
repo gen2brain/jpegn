@@ -2,15 +2,10 @@
 
 #include "textflag.h"
 
-// NEON implementations of the plane-to-RGBA conversions. The grayscale and RGB
-// kernels rely on the NEON VST4 structured store to interleave the planes with a
-// constant alpha. The YCbCr kernel performs the JFIF fixed-point conversion in
-// 32-bit lanes (matching the scalar reference exactly) before narrowing back to
-// bytes with unsigned saturation.
-//
-// Several 32-bit-lane SIMD instructions (VMUL, signed SSHR, UQXTN/SQXTUN) are
-// not recognized by the Go assembler and are emitted via WORD directives, using
-// the same approach as idct_arm64.s.
+// NEON plane-to-RGBA conversions. Gray/RGB interleave via the VST4 structured
+// store; YCbCr does the JFIF fixed-point conversion in 32-bit lanes then narrows
+// with unsigned saturation. 32-bit VMUL/SSHR and UQXTN/SQXTUN are emitted as WORD
+// (the Go assembler does not accept these mnemonics), as in idct_arm64.s.
 
 // func grayToRGBANEON(dst, gray []byte)
 // Processes 16 pixels per iteration. gray_len is a multiple of 16.

@@ -112,22 +112,13 @@ after_copy:
 
     RET
     
-// Catmull-Rom 2x upsampling (NEON middle-loop kernels).
-//
-// These kernels accelerate only the vectorizable interior of each row (H) or
-// column strip (V); the three-sample boundaries and the sub-block tail are
-// handled by the shared scalar helpers in upsample_noasm.go. Each invocation
-// processes 8 samples per iteration with the 4-tap filter
-//   O1 = (A*p0 + B*p1 + C*p2 + D*p3 + 64) >> 7
-//   O2 = (D*p0 + C*p1 + B*p2 + A*p3 + 64) >> 7   (A=-9 B=111 C=29 D=-3)
-// in 32-bit lanes, then clamps to [0,255] via unsigned-saturating narrowing.
-//
-// Coefficients live in V16(A) V17(B) V18(C) V19(D) V20(64). The 32-bit-lane
-// VMUL, signed SSHR and UQXTN/SQXTUN narrowing are emitted as WORD directives
-// (the Go assembler does not accept these mnemonics).
+// Catmull-Rom 2x upsampling: NEON middle-loop kernels (8 samples/iter, 4-tap
+// filter in 32-bit lanes). Edges and the sub-block tail are handled by the scalar
+// helpers in upsample_noasm.go. Coefficients: V16(A=-9) V17(B=111) V18(C=29)
+// V19(D=-3) V20(64). 32-bit VMUL/SSHR and UQXTN/SQXTUN are emitted as WORD.
 
-// FILTER8 consumes p0..p3 byte vectors in V0..V3 and produces O1 in V5.8B and
-// O2 in V6.8B. Clobbers V4, V7, V8-V15, V21-V25.
+// FILTER8 takes p0..p3 in V0..V3 and produces O1 in V5.8B, O2 in V6.8B.
+// Clobbers V4, V7, V8-V15, V21-V25.
 #define FILTER8() \
 	VUXTL V0.B8, V4.H8; VUXTL V4.H4, V8.S4; VUXTL2 V4.H8, V9.S4;    \
 	VUXTL V1.B8, V4.H8; VUXTL V4.H4, V10.S4; VUXTL2 V4.H8, V11.S4;  \
@@ -161,8 +152,7 @@ after_copy:
 	MOVD $64, R3;  VDUP R3, V20.S4
 
 // func upsampleHMiddleNEON(dst, src unsafe.Pointer, n int)
-// Writes 2*n interleaved interior samples. n is a multiple of 8. For input
-// position i, p0..p3 are src[i..i+3]; outputs O1,O2 are stored interleaved.
+// Writes 2*n interleaved interior samples (n a multiple of 8); p0..p3 = src[i..i+3].
 TEXT ·upsampleHMiddleNEON(SB), NOSPLIT, $0-24
 	MOVD dst+0(FP), R0
 	MOVD src+8(FP), R1
@@ -190,8 +180,7 @@ h_mid_done:
 	RET
 
 // func upsampleVMiddleNEON(dst1, dst2, src unsafe.Pointer, stride, n int)
-// Writes n samples to each of two output rows. n is a multiple of 8. p0..p3 are
-// the four source rows src, src+stride, src+2*stride, src+3*stride.
+// Writes n samples to each output row (n a multiple of 8); p0..p3 = rows src+k*stride.
 TEXT ·upsampleVMiddleNEON(SB), NOSPLIT, $0-40
 	MOVD dst1+0(FP), R0
 	MOVD dst2+8(FP), R1

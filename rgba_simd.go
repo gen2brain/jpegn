@@ -2,15 +2,11 @@
 
 package jpegn
 
-// The SIMD RGBA kernels operate on contiguous runs of pixels and are unaware of
-// component strides. Components are not guaranteed to be stride-packed at
-// conversion time: a full-resolution component of a non-MCU-aligned image keeps
-// a stride rounded up to the block grid (e.g. width 487, stride 496). These
-// drivers therefore feed the kernels one row at a time over each component's
-// real stride, handling the sub-block tail of every row with the scalar path.
+// The SIMD RGBA kernels are stride-unaware, but components may have stride > width
+// at conversion time (non-MCU-aligned full-res planes). These drivers feed the
+// kernels one row at a time, handling each row's sub-block tail with the scalar path.
 
-// ycbcrToRGBARows drives a YCbCr->RGBA kernel that converts whole blocks of
-// `block` pixels. The kernel signature matches the per-architecture assembly.
+// ycbcrToRGBARows drives a YCbCr->RGBA kernel over `block`-pixel chunks per row.
 func ycbcrToRGBARows(y, cb, cr *component, dst []byte, width, height, block int, kernel func(dst, y, cb, cr []byte)) {
 	rem := width % block
 	limit := width - rem
@@ -34,7 +30,7 @@ func ycbcrToRGBARows(y, cb, cr *component, dst []byte, width, height, block int,
 	}
 }
 
-// rgbToRGBARows drives an RGB->RGBA kernel that converts whole blocks of `block` pixels.
+// rgbToRGBARows drives an RGB->RGBA kernel over `block`-pixel chunks per row.
 func rgbToRGBARows(r, g, b *component, dst []byte, width, height, block int, kernel func(dst, r, g, b []byte)) {
 	rem := width % block
 	limit := width - rem
@@ -58,7 +54,7 @@ func rgbToRGBARows(r, g, b *component, dst []byte, width, height, block int, ker
 	}
 }
 
-// grayToRGBARows drives a grayscale->RGBA kernel that converts whole blocks of `block` pixels.
+// grayToRGBARows drives a grayscale->RGBA kernel over `block`-pixel chunks per row.
 func grayToRGBARows(c *component, dst []byte, width, height, block int, kernel func(dst, gray []byte)) {
 	rem := width % block
 	limit := width - rem

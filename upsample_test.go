@@ -6,8 +6,7 @@ import (
 	"testing"
 )
 
-// makeUpsampleComponent builds a component with deterministic pseudo-random
-// pixels and an optional stride padding (stride >= width).
+// makeUpsampleComponent builds a component with deterministic pixels and stride >= width.
 func makeUpsampleComponent(w, h, stride int) *component {
 	pix := make([]byte, stride*h)
 	r := rand.New(rand.NewSource(int64(w*131 + h*17 + stride)))
@@ -18,10 +17,8 @@ func makeUpsampleComponent(w, h, stride int) *component {
 	return &component{width: w, height: h, stride: stride, pixels: pix}
 }
 
-// TestUpsampleCatmullRomAssembly compares the (possibly SIMD-accelerated)
-// horizontal and vertical Catmull-Rom upsamplers against the scalar reference
-// across sizes that exercise the vectorized middle path, its scalar tail, and
-// the edge handling.
+// TestUpsampleCatmullRomAssembly compares the H/V upsamplers against the scalar
+// reference across sizes exercising the SIMD middle, its tail, and the edges.
 func TestUpsampleCatmullRomAssembly(t *testing.T) {
 	cases := []struct{ w, h, stride int }{
 		{3, 3, 3},

@@ -40,8 +40,7 @@ CONST_YMM(const_w2mw6, 1568) // w2-w6
 CONST_YMM(const_w2pw6, 3784) // w2+w6
 
 // Other constants for scaling, rounding, and level-shifting.
-// const_128 serves three roles that all share the value 128: the rotation rounding
-// bias (>> 8), the Pass 1 rounding bias, and the final level shift.
+// const_128 is shared by the rotation rounding, Pass 1 rounding, and level shift.
 CONST_YMM(const_181, 181)
 CONST_YMM(const_128, 128)
 CONST_YMM(const_4, 4)              // P2 intermediate rounding (for >> 3)

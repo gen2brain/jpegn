@@ -36,9 +36,7 @@ func upsampleCatmullRomScalar(c *component, width, height int) {
 	}
 }
 
-// upsampleHEdges writes the three left and three right boundary output samples
-// for a single horizontally-upsampled row. in is the source row (length >= width)
-// and out is the destination row (length 2*width).
+// upsampleHEdges writes the three left and three right boundary samples of a row.
 func upsampleHEdges(in, out []byte, width int) {
 	p0L := int32(in[0])
 	p1L := int32(in[1])
@@ -58,8 +56,7 @@ func upsampleHEdges(in, out []byte, width int) {
 	out[newWidth-1] = cf(cf2A*p0R + cf2B*p1R)            // mirrors out[0]
 }
 
-// upsampleHMiddle computes the interior output samples of a horizontally-upsampled
-// row for source positions x in [start, width-3). It writes out[2x+3] and out[2x+4].
+// upsampleHMiddle computes interior samples for source positions x in [start, width-3).
 func upsampleHMiddle(in, out []byte, width, start int) {
 	for x := start; x < width-3; x++ {
 		p0 := int32(in[x])
@@ -92,8 +89,7 @@ func upsampleHScalar(c *component) {
 	c.pixels = out
 }
 
-// upsampleVTopEdge writes the first three output rows (0, 1, 2) of a
-// vertically-upsampled component from the first three source rows.
+// upsampleVTopEdge writes the first three output rows from the first three source rows.
 func upsampleVTopEdge(src, out []byte, w, stride int) {
 	s1 := stride
 	s2 := stride << 1
@@ -109,9 +105,7 @@ func upsampleVTopEdge(src, out []byte, w, stride int) {
 	}
 }
 
-// upsampleVBottomEdge writes the last three output rows of a vertically-upsampled
-// component. src points at source row H-3; out1/out2/out3 are output rows
-// 2H-3, 2H-2, 2H-1 respectively.
+// upsampleVBottomEdge writes the last three output rows from source rows H-3..H-1.
 func upsampleVBottomEdge(src, out1, out2, out3 []byte, w, stride int) {
 	s1 := stride
 	s2 := stride << 1
@@ -127,9 +121,8 @@ func upsampleVBottomEdge(src, out1, out2, out3 []byte, w, stride int) {
 	}
 }
 
-// upsampleVMiddleRowPair computes the interior output row pair for a source row,
-// reading four consecutive source rows starting at src and writing out1 (the even
-// output row) and out2 (the odd output row) for columns in [start, w).
+// upsampleVMiddleRowPair computes the interior output row pair (cols [start, w))
+// from four consecutive source rows starting at src.
 func upsampleVMiddleRowPair(src, out1, out2 []byte, w, stride, start int) {
 	s1 := stride
 	s2 := stride << 1

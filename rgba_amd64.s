@@ -22,9 +22,8 @@ GLOBL c_183<>(SB), (RODATA + NOPTR), $4
 GLOBL c_128_w<>(SB), (RODATA + NOPTR), $2
 GLOBL c_128_d<>(SB), (RODATA + NOPTR), $4
 
-// INTERLEAVE_STORE_RGBA combines four byte-interleaved word vectors into 32 contiguous
-// RGBA pixels and stores 128 bytes at (DI). Inputs: RG low/high in Y4/Y5, BA low/high in
-// Y6/Y7. Clobbers Y3 and Y8-Y14. Shared by the RGB and grayscale conversion loops.
+// INTERLEAVE_STORE_RGBA interleaves RG (Y4/Y5) and BA (Y6/Y7) into 32 RGBA pixels
+// and stores 128 bytes at (DI). Clobbers Y3, Y8-Y14.
 #define INTERLEAVE_STORE_RGBA() \
 	VPUNPCKLWD Y6, Y4, Y8;           \
 	VPUNPCKHWD Y6, Y4, Y9;           \

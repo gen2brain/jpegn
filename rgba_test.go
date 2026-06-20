@@ -34,10 +34,8 @@ func makeRandGray(w, h int) *component {
 	return makeRandComponent(w, h)
 }
 
-// makeRandComponentStride builds a component whose row stride exceeds its width,
-// mirroring a full-resolution component of a non-MCU-aligned image. The padding
-// bytes are filled with a sentinel so a stride-unaware conversion produces
-// visibly wrong output.
+// makeRandComponentStride builds a component with stride > width, padding the
+// extra columns with a sentinel so a stride-unaware conversion produces wrong output.
 func makeRandComponentStride(w, h, stride int) *component {
 	pix := make([]byte, stride*h)
 	r := rand.New(rand.NewSource(int64(w*h + stride)))
@@ -54,9 +52,7 @@ func makeRandComponentStride(w, h, stride int) *component {
 	return &component{pixels: pix, stride: stride, width: w, height: h}
 }
 
-// TestRGBAStrideHandling verifies the SIMD conversions honor component strides
-// that differ from the image width (the odd-dimension case), matching the
-// stride-aware scalar reference.
+// TestRGBAStrideHandling verifies the SIMD conversions honor stride != width.
 func TestRGBAStrideHandling(t *testing.T) {
 	cases := []struct{ w, h, stride int }{
 		{487, 17, 496}, // luma-like padding, width not a multiple of 16/32

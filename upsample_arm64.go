@@ -63,8 +63,7 @@ func upsampleHMiddleNEON(dst, src unsafe.Pointer, n int)
 //go:noescape
 func upsampleVMiddleNEON(dst1, dst2, src unsafe.Pointer, stride, n int)
 
-// upsampleCatmullRom repeatedly applies 2x horizontal and vertical Catmull-Rom
-// upsampling until the component reaches the target dimensions.
+// upsampleCatmullRom applies 2x Catmull-Rom upsampling until the target size is reached.
 func upsampleCatmullRom(c *component, width, height int) {
 	for c.width < width || c.height < height {
 		if c.width < width {
@@ -77,9 +76,8 @@ func upsampleCatmullRom(c *component, width, height int) {
 	}
 }
 
-// upsampleH performs 2x horizontal Catmull-Rom upsampling, using NEON for the
-// interior of each row. A width of at least 11 guarantees one full 8-sample NEON
-// block in the interior (width-3 >= 8).
+// upsampleH performs 2x horizontal Catmull-Rom upsampling, NEON for the row interior.
+// Width >= 11 guarantees at least one full 8-sample NEON block (width-3 >= 8).
 func upsampleH(c *component) {
 	if c.width < 11 {
 		upsampleHScalar(c)
@@ -107,9 +105,8 @@ func upsampleH(c *component) {
 	c.pixels = out
 }
 
-// upsampleV performs 2x vertical Catmull-Rom upsampling, using NEON for the
-// interior rows. Requires width >= 8 (one full NEON column block) and height >= 4
-// (at least one interior output row pair).
+// upsampleV performs 2x vertical Catmull-Rom upsampling, NEON for the interior rows.
+// Requires width >= 8 (one NEON column block) and height >= 4 (one interior row pair).
 func upsampleV(c *component) {
 	if c.width < 8 || c.height < 4 {
 		upsampleVScalar(c)
