@@ -155,15 +155,13 @@ func Decode(r io.Reader, opts ...*Options) (image.Image, error) {
 // DecodeConfig returns the color model and dimensions of a JPEG image without decoding the entire image data.
 // The dimensions returned are as stored in the file (SOF marker), ignoring any EXIF orientation tags.
 func DecodeConfig(r io.Reader) (image.Config, error) {
-	// Strategy: read incrementally until we find the SOF marker.
-	// Start with a pooled buffer, then read more if needed.
 	bufPtr := headerBufferPool.Get().(*[]byte)
 	defer headerBufferPool.Put(bufPtr)
-	initialBuf := *bufPtr
+	buf := *bufPtr
 
-	// Try to read the initial buffer
-	n, err := io.ReadFull(r, initialBuf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+	// Read a header-sized prefix; the SOF marker is in the header for nearly all images.
+	n, err := io.ReadFull(r, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
 		return image.Config{}, err
 	}
 
@@ -171,24 +169,6 @@ func DecodeConfig(r io.Reader) (image.Config, error) {
 		return image.Config{}, ErrNoJPEG
 	}
 
-	var data []byte
-	// If we read less than the full buffer, the file is small - use what we got
-	if n < len(initialBuf) {
-		data = initialBuf[:n]
-	} else {
-		// File is larger than initial buffer - read the rest to ensure we get SOF
-		// For efficiency, read everything remaining since we already buffered 16KB
-		remaining, err := io.ReadAll(r)
-		if err != nil {
-			return image.Config{}, err
-		}
-		// Combine initial buffer with remaining data
-		data = make([]byte, n+len(remaining))
-		copy(data, initialBuf[:n])
-		copy(data[n:], remaining)
-	}
-
-	// Use a decoder from our pool.
 	d := decoderPool.Get().(*decoder)
 
 	d.resetForConfig()
@@ -202,10 +182,40 @@ func DecodeConfig(r io.Reader) (image.Config, error) {
 	d.autoRotate = false
 	d.scaleDenom = 1 // Always use full size for DecodeConfig
 
+	// decode(configOnly) stops at SOF, so the buffered prefix is normally enough.
+	_, decErr := d.decode(buf[:n], true)
+	if decErr == nil {
+		return d.config()
+	}
+
+	// The prefix was the whole file: the error is genuine.
+	if n < len(buf) {
+		return image.Config{}, decErr
+	}
+
+	// Rare: SOF lies past the prefix (very large APP segments). Read the rest and retry.
+	remaining, err := io.ReadAll(r)
+	if err != nil {
+		return image.Config{}, err
+	}
+
+	data := make([]byte, n+len(remaining))
+	copy(data, buf[:n])
+	copy(data[n:], remaining)
+
+	d.resetForConfig()
+	d.autoRotate = false
+	d.scaleDenom = 1
+
 	if _, err := d.decode(data, true); err != nil {
 		return image.Config{}, err
 	}
 
+	return d.config()
+}
+
+// config builds an image.Config from the decoded SOF state.
+func (d *decoder) config() (image.Config, error) {
 	var cm color.Model
 	switch d.ncomp {
 	case 1:
