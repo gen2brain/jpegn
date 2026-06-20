@@ -9,31 +9,31 @@ JPEG decoder with SIMD optimizations.
 
 Compared to the standard library:
 ```
-BenchmarkDecodeBaseline420-8             	    2250	   1068625 ns/op	  427250 B/op	       9 allocs/op
-BenchmarkDecodeBaseline420StdLib-8       	    1243	   1939177 ns/op	  407093 B/op	       5 allocs/op
+BenchmarkDecodeBaseline420-8             	    3124	    742291 ns/op	  426321 B/op	       6 allocs/op
+BenchmarkDecodeBaseline420StdLib-8       	    1318	   1819781 ns/op	  407089 B/op	       5 allocs/op
 
-BenchmarkDecodeProgressive420-8          	     880	   2789336 ns/op	 2001552 B/op	      16 allocs/op
-BenchmarkDecodeProgressive420StdLib-8    	     663	   3652539 ns/op	 1980106 B/op	      17 allocs/op
+BenchmarkDecodeProgressive420-8          	    1156	   2128195 ns/op	 1999883 B/op	      10 allocs/op
+BenchmarkDecodeProgressive420StdLib-8    	     662	   3602531 ns/op	 1980106 B/op	      17 allocs/op
 
-BenchmarkDecodeConfig-8                  	 5247145	       463.5 ns/op	      53 B/op	       1 allocs/op
-BenchmarkDecodeConfigStdLib-8            	 1618652	      1543 ns/op	   13616 B/op	       2 allocs/op
+BenchmarkDecodeConfig-8                  	 5923922	       410.4 ns/op	      48 B/op	       1 allocs/op
+BenchmarkDecodeConfigStdLib-8            	 1473702	      1474 ns/op	   13616 B/op	       2 allocs/op
 
-BenchmarkDecodeToRGBANearestNeighbor-8   	    1569	   1517478 ns/op	 2002146 B/op	      13 allocs/op
-BenchmarkDecodeToRGBACatmullRom-8        	    1472	   1637226 ns/op	 2265237 B/op	      15 allocs/op
-BenchmarkDecodeToRGBAStdLib-8            	     805	   2940831 ns/op	 1455734 B/op	       7 allocs/op
+BenchmarkDecodeToRGBANearestNeighbor-8   	    2053	   1157808 ns/op	 2000039 B/op	      10 allocs/op
+BenchmarkDecodeToRGBACatmullRom-8        	    1915	   1263899 ns/op	 2262274 B/op	      13 allocs/op
+BenchmarkDecodeToRGBAStdLib-8            	     849	   2839869 ns/op	 1455735 B/op	       7 allocs/op
 ```
 
 Difference with assembly optimizations (noasm vs asm):
 ```
 benchmark                                  old ns/op     new ns/op     delta
-BenchmarkDecodeBaseline420-8               2056599       1068625       -48.04%
-BenchmarkDecodeProgressive420-8            3712737       2789336       -24.87%
-BenchmarkDecodeConfig-8                    512.9         463.5         -9.63%
-BenchmarkDecodeToRGBANearestNeighbor-8     3361461       1517478       -54.86%
-BenchmarkDecodeToRGBACatmullRom-8          4546850       1637226       -63.99%
-BenchmarkIdct-8                            166.4         40.54         -75.64%
-BenchmarkUpsampleNearestNeighbor-8         348521        113296        -67.49%
-BenchmarkUpsampleCatmullRom-8              2905568       338537        -88.35%
+BenchmarkDecodeBaseline420-8               1584411       742291        -53.15%
+BenchmarkDecodeProgressive420-8            2882890       2128195       -26.18%
+BenchmarkDecodeConfig-8                    453.7         410.4         -9.54%
+BenchmarkDecodeToRGBANearestNeighbor-8     2942280       1157808       -60.65%
+BenchmarkDecodeToRGBACatmullRom-8          4016591       1263899       -68.53%
+BenchmarkIdct-8                            144.1         36.68         -74.55%
+BenchmarkUpsampleNearestNeighbor-8         359914        116759        -67.56%
+BenchmarkUpsampleCatmullRom-8              2703968       319568        -88.18%
 ```
 
 ### Build tags
