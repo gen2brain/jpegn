@@ -7,17 +7,6 @@ import (
 	"io"
 )
 
-// vlcCode represents a single entry in the pre-calculated Huffman lookup table.
-// It stores the number of bits for the code and the decoded value.
-type vlcCode struct {
-	bits, code uint8
-}
-
-// vlcCode8 is an 8-bit lookup table entry (like stdlib's approach)
-// High 8 bits: decoded value
-// Low 8 bits: code length + 1 (or 0 if code longer than 8 bits)
-type vlcCode8 uint16
-
 // component stores information about a single color component (e.g., Y, Cb, or Cr).
 type component struct {
 	id                 int     // Component identifier (e.g., 1 for Y, 2 for Cb, 3 for Cr).
@@ -47,10 +36,8 @@ type decoder struct {
 	comp                [4]component              // Array to hold data for each color component.
 	qtUsed, qtAvail     int                       // Bitmasks tracking used and available quantization tables.
 	qtab                [4]*[64]uint8             // Pointers for pooling. Stored in zigzag order.
-	dcVlcTab            [4]*[65536]vlcCode        // DC Huffman tables (indices 0-3) - 16-bit lookup
-	acVlcTab            [4]*[65536]vlcCode        // AC Huffman tables (indices 0-3) - 16-bit lookup
-	dcVlcTab8           [4]*[256]vlcCode8         // DC Huffman tables - 8-bit lookup (fast path)
-	acVlcTab8           [4]*[256]vlcCode8         // AC Huffman tables - 8-bit lookup (fast path)
+	dcHuff              [4]*huffTable             // DC Huffman tables (indices 0-3).
+	acHuff              [4]*huffTable             // AC Huffman tables (indices 0-3).
 	buf                 uint64                    // Use uint64 for fewer refills.
 	bufBits             int                       // Number of valid bits in the bit buffer.
 	markerHit           bool                      // True if a marker was hit during bit reading.
@@ -179,32 +166,20 @@ var defaultACChromaValues = []byte{
 	0xf9, 0xfa,
 }
 
-// Pre-built default VLC tables.
+// Pre-built default Huffman tables (JPEG Annex K).
 var (
-	defaultDCLumaVLC   [65536]vlcCode
-	defaultDCChromaVLC [65536]vlcCode
-	defaultACLumaVLC   [65536]vlcCode
-	defaultACChromaVLC [65536]vlcCode
-
-	// 8-bit lookup tables (fast path, like stdlib)
-	defaultDCLumaVLC8   [256]vlcCode8
-	defaultDCChromaVLC8 [256]vlcCode8
-	defaultACLumaVLC8   [256]vlcCode8
-	defaultACChromaVLC8 [256]vlcCode8
+	defaultDCLumaHuff   huffTable
+	defaultDCChromaHuff huffTable
+	defaultACLumaHuff   huffTable
+	defaultACChromaHuff huffTable
 )
 
 func init() {
-	// Build default VLC tables once at startup.
-	_ = buildVlcTable(&defaultDCLumaVLC, &defaultDCLumaCounts, defaultDCLumaValues)
-	_ = buildVlcTable(&defaultDCChromaVLC, &defaultDCChromaCounts, defaultDCChromaValues)
-	_ = buildVlcTable(&defaultACLumaVLC, &defaultACLumaCounts, defaultACLumaValues)
-	_ = buildVlcTable(&defaultACChromaVLC, &defaultACChromaCounts, defaultACChromaValues)
-
-	// Build 8-bit lookup tables (fast path)
-	_ = buildVlcTable8(&defaultDCLumaVLC8, &defaultDCLumaCounts, defaultDCLumaValues)
-	_ = buildVlcTable8(&defaultDCChromaVLC8, &defaultDCChromaCounts, defaultDCChromaValues)
-	_ = buildVlcTable8(&defaultACLumaVLC8, &defaultACLumaCounts, defaultACLumaValues)
-	_ = buildVlcTable8(&defaultACChromaVLC8, &defaultACChromaCounts, defaultACChromaValues)
+	// Build default Huffman tables once at startup.
+	_ = buildHuff(&defaultDCLumaHuff, &defaultDCLumaCounts, defaultDCLumaValues)
+	_ = buildHuff(&defaultDCChromaHuff, &defaultDCChromaCounts, defaultDCChromaValues)
+	_ = buildHuff(&defaultACLumaHuff, &defaultACLumaCounts, defaultACLumaValues)
+	_ = buildHuff(&defaultACChromaHuff, &defaultACChromaCounts, defaultACChromaValues)
 }
 
 // clamp clamps an int32 value to the valid 8-bit pixel range [0, 255].
@@ -212,201 +187,20 @@ func clamp(x int32) byte {
 	return byte(min(max(x, 0), 255))
 }
 
-// buildVlcTable builds the fast lookup table from Huffman table definitions (COUNTS and HUFFVAL).
-func buildVlcTable(vlc *[65536]vlcCode, counts *[16]uint8, values []byte) error {
-	// Clear the table before filling it.
-	for i := range vlc {
-		vlc[i] = vlcCode{}
-	}
-
-	// Validate counts and calculate the total number of symbols.
-	nSymbols := 0
-	for _, c := range counts {
-		nSymbols += int(c)
-	}
-
-	if nSymbols > 256 {
-		return ErrSyntax
-	}
-	// Allow values slice to be longer than nSymbols, only use the first nSymbols elements.
-	if len(values) < nSymbols {
-		return ErrSyntax
-	}
-
-	// Structure to hold generated codes temporarily.
-	type symbolCode struct {
-		code   uint16
-		length uint8
-		value  uint8
-	}
-
-	// We allocate space for all symbols present.
-	symbols := make([]symbolCode, nSymbols)
-
-	// Generate canonical Huffman codes.
-	k := 0
-	// Use uint32 for code generation to prevent overflow when shifting at L15 (code <<= 1).
-	// The standard algorithm requires tracking codes up to 2^16.
-	code := uint32(0)
-	valueIdx := 0
-
-	for length := 1; length <= 16; length++ {
-		count := int(counts[length-1])
-		for i := 0; i < count; i++ {
-			if k >= nSymbols {
-				// Should be caught by initial validation.
-				return ErrSyntax
-			}
-
-			// Ensure the generated code fits in 16 bits before assignment.
-			// This check prevents assigning 65536 (which wraps to 0 in uint16) if the table is full.
-			if code > 0xFFFF {
-				// This should be caught by Kraft's inequality check below if counts are valid.
-				return ErrSyntax
-			}
-
-			symbols[k].length = uint8(length)
-			symbols[k].code = uint16(code)
-			symbols[k].value = values[valueIdx]
-
-			k++
-			code++
-			valueIdx++
-		}
-
-		// Check Kraft's inequality (ensures codes do not overflow the space).
-		if code > (uint32(1) << length) {
-			return ErrSyntax
-		}
-
-		// If the tree is full at this level, stop if all symbols consumed.
-		if code == (uint32(1) << length) {
-			if k == nSymbols {
-				break
-			}
-			// If tree is full but symbols remain for longer lengths, it's an oversubscribed table.
-			// If L=16 and tree is full, we must ensure k == nSymbols.
-			if length == 16 && k < nSymbols {
-				return ErrSyntax
-			}
-		}
-
-		// Prepare starting code for the next length.
-		// If length < 16, shift code. If length == 16, loop terminates.
-		if length < 16 {
-			code <<= 1
-		}
-	}
-
-	// Populate the 16-bit lookup table (LUT).
-	for i := 0; i < nSymbols; i++ {
-		s := symbols[i]
-		codeLen := s.length
-		huffCode := s.code
-		huffVal := s.value
-
-		if codeLen == 0 {
-			continue // Should not happen based on generation logic.
-		}
-
-		// Calculate LUT indices (MSB-first alignment).
-		shift := 16 - int(codeLen)
-		numEntries := 1 << shift
-		baseIndex := uint32(huffCode) << shift
-
-		// Fill the LUT entries.
-		for j := uint32(0); j < uint32(numEntries); j++ {
-			index := baseIndex + j
-			if index < 65536 {
-				// Collision check is unnecessary if counts are valid and generation is correct.
-				vlc[index].bits = codeLen
-				vlc[index].code = huffVal
-			}
-		}
-	}
-
-	return nil
-}
-
-// buildVlcTable8 builds an 8-bit Huffman lookup table (like stdlib's approach).
-// This is faster for progressive JPEG because it only requires 8 bits in the buffer.
-// High 8 bits of uint16: decoded value
-// Low 8 bits of uint16: code length + 1 (or 0 if code is longer than 8 bits)
-func buildVlcTable8(vlc *[256]vlcCode8, counts *[16]uint8, values []byte) error {
-	// Clear the table
-	for i := range vlc {
-		vlc[i] = 0
-	}
-
-	// Validate counts
-	nSymbols := 0
-	for _, c := range counts {
-		nSymbols += int(c)
-	}
-
-	if nSymbols > 256 || len(values) < nSymbols {
-		return ErrSyntax
-	}
-
-	// Generate canonical Huffman codes
-	code := uint32(0)
-	valueIdx := 0
-
-	for length := 1; length <= 8; length++ { // Only handle codes up to 8 bits
-		count := int(counts[length-1])
-		for i := 0; i < count; i++ {
-			if valueIdx >= nSymbols {
-				return ErrSyntax
-			}
-
-			// Calculate the 8-bit index range for this code
-			// Codes are MSB-aligned, so a 3-bit code like "101" becomes "10100000"
-			base := uint8(code << (8 - length))
-			lutValue := vlcCode8(uint16(values[valueIdx])<<8 | uint16(length+1))
-
-			// Fill all matching 8-bit prefixes
-			numEntries := 1 << (8 - length)
-			for k := 0; k < numEntries; k++ {
-				vlc[uint8(base)|uint8(k)] = lutValue
-			}
-
-			code++
-			valueIdx++
-		}
-
-		if code > (1 << length) {
-			return ErrSyntax
-		}
-
-		if length < 8 {
-			code <<= 1
-		}
-	}
-
-	return nil
-}
-
 // newDecoder creates a new decoder instance and allocates the large tables.
 func newDecoder() *decoder {
 	d := new(decoder)
 	for i := 0; i < 4; i++ {
 		d.qtab[i] = new([64]uint8)
-		// Initialize separate DC and AC Huffman tables.
-		d.dcVlcTab[i] = new([65536]vlcCode)
-		d.acVlcTab[i] = new([65536]vlcCode)
-		d.dcVlcTab8[i] = new([256]vlcCode8)
-		d.acVlcTab8[i] = new([256]vlcCode8)
+		d.dcHuff[i] = new(huffTable)
+		d.acHuff[i] = new(huffTable)
 	}
 
 	// Initialize default Huffman tables by copying from pre-built globals.
-	*d.dcVlcTab[0] = defaultDCLumaVLC
-	*d.dcVlcTab[1] = defaultDCChromaVLC
-	*d.acVlcTab[0] = defaultACLumaVLC
-	*d.acVlcTab[1] = defaultACChromaVLC
-	*d.dcVlcTab8[0] = defaultDCLumaVLC8
-	*d.dcVlcTab8[1] = defaultDCChromaVLC8
-	*d.acVlcTab8[0] = defaultACLumaVLC8
-	*d.acVlcTab8[1] = defaultACChromaVLC8
+	*d.dcHuff[0] = defaultDCLumaHuff
+	*d.dcHuff[1] = defaultDCChromaHuff
+	*d.acHuff[0] = defaultACLumaHuff
+	*d.acHuff[1] = defaultACChromaHuff
 
 	return d
 }
@@ -592,40 +386,32 @@ func (d *decoder) resyncToRestart(nextRst *int) bool {
 // This skips expensive VLC table initialization since config-only decoding doesn't need Huffman tables.
 func (d *decoder) resetForConfig() {
 	// Save pointers to the tables.
-	dcVlcTmp := d.dcVlcTab
-	acVlcTmp := d.acVlcTab
-	dcVlc8Tmp := d.dcVlcTab8
-	acVlc8Tmp := d.acVlcTab8
+	dcHuffTmp := d.dcHuff
+	acHuffTmp := d.acHuff
 	qtabTmp := d.qtab
 
 	// Zero the struct. This clears references (jpegData, pixels, etc.) allowing GC, and resets all state variables.
 	*d = decoder{}
 
 	// Restore pointers to the tables.
-	d.dcVlcTab = dcVlcTmp
-	d.acVlcTab = acVlcTmp
-	d.dcVlcTab8 = dcVlc8Tmp
-	d.acVlcTab8 = acVlc8Tmp
+	d.dcHuff = dcHuffTmp
+	d.acHuff = acHuffTmp
 	d.qtab = qtabTmp
 }
 
 // reset clears the decoder state for reuse, preserving the allocated tables.
 func (d *decoder) reset() {
 	// Save pointers to the tables.
-	dcVlcTmp := d.dcVlcTab
-	acVlcTmp := d.acVlcTab
-	dcVlc8Tmp := d.dcVlcTab8
-	acVlc8Tmp := d.acVlcTab8
+	dcHuffTmp := d.dcHuff
+	acHuffTmp := d.acHuff
 	qtabTmp := d.qtab
 
 	// Zero the struct. This clears references (jpegData, pixels, etc.) allowing GC, and resets all state variables.
 	*d = decoder{}
 
 	// Restore pointers to the tables.
-	d.dcVlcTab = dcVlcTmp
-	d.acVlcTab = acVlcTmp
-	d.dcVlcTab8 = dcVlc8Tmp
-	d.acVlcTab8 = acVlc8Tmp
+	d.dcHuff = dcHuffTmp
+	d.acHuff = acHuffTmp
 	d.qtab = qtabTmp
 
 	// Clear the quantization tables to prevent state leakage between decodes.
@@ -635,25 +421,16 @@ func (d *decoder) reset() {
 
 	// Since tables are pooled and might have been overwritten by a previous DHT,
 	// we must restore the defaults here for the next decode operation.
-	*d.dcVlcTab[0] = defaultDCLumaVLC
-	*d.dcVlcTab[1] = defaultDCChromaVLC
-	*d.acVlcTab[0] = defaultACLumaVLC
-	*d.acVlcTab[1] = defaultACChromaVLC
-	*d.dcVlcTab8[0] = defaultDCLumaVLC8
-	*d.dcVlcTab8[1] = defaultDCChromaVLC8
-	*d.acVlcTab8[0] = defaultACLumaVLC8
-	*d.acVlcTab8[1] = defaultACChromaVLC8
+	*d.dcHuff[0] = defaultDCLumaHuff
+	*d.dcHuff[1] = defaultDCChromaHuff
+	*d.acHuff[0] = defaultACLumaHuff
+	*d.acHuff[1] = defaultACChromaHuff
 
-	// Clear non-default tables (Index 2 and 3) for safety. Whole-array
-	// assignment compiles to a fast memclr.
-	*d.dcVlcTab[2] = [65536]vlcCode{}
-	*d.dcVlcTab[3] = [65536]vlcCode{}
-	*d.acVlcTab[2] = [65536]vlcCode{}
-	*d.acVlcTab[3] = [65536]vlcCode{}
-	*d.dcVlcTab8[2] = [256]vlcCode8{}
-	*d.dcVlcTab8[3] = [256]vlcCode8{}
-	*d.acVlcTab8[2] = [256]vlcCode8{}
-	*d.acVlcTab8[3] = [256]vlcCode8{}
+	// Clear non-default tables (Index 2 and 3) for safety.
+	*d.dcHuff[2] = huffTable{}
+	*d.dcHuff[3] = huffTable{}
+	*d.acHuff[2] = huffTable{}
+	*d.acHuff[3] = huffTable{}
 }
 
 // alignAndRewind aligns the bitstream and synchronizes d.pos with the buffer.
@@ -1223,16 +1000,12 @@ func (d *decoder) decodeDHT() error {
 			return ErrUnsupported
 		}
 
-		// Select the correct VLC tables (DC or AC): the 16-bit lookup and its
-		// 8-bit fast-path counterpart.
-		var vlc *[65536]vlcCode
-		var vlc8 *[256]vlcCode8
+		// Select the correct Huffman table (DC or AC).
+		var huff *huffTable
 		if tc == 0 {
-			vlc = d.dcVlcTab[th]
-			vlc8 = d.dcVlcTab8[th]
+			huff = d.dcHuff[th]
 		} else {
-			vlc = d.acVlcTab[th]
-			vlc8 = d.acVlcTab8[th]
+			huff = d.acHuff[th]
 		}
 
 		// Read counts of codes for each length (1-16 bits).
@@ -1256,13 +1029,8 @@ func (d *decoder) decodeDHT() error {
 		// Extract values (HUFFVAL). d.pos is now at the start of the values.
 		values := d.jpegData[d.pos : d.pos+n]
 
-		// Build the lookup table using canonical Huffman codes.
-		// buildVlcTable handles clearing the table (Pooling) and validation.
-		if err := buildVlcTable(vlc, &counts, values); err != nil {
-			return err
-		}
-
-		if err := buildVlcTable8(vlc8, &counts, values); err != nil {
+		// Build the canonical Huffman decoding table.
+		if err := buildHuff(huff, &counts, values); err != nil {
 			return err
 		}
 

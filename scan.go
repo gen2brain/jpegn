@@ -2,44 +2,43 @@ package jpegn
 
 // Entropy Decoding
 
-// getHuffSymbol decodes a Huffman symbol from the bitstream without reading subsequent value bits.
-func (d *decoder) getHuffSymbol(vlc *[65536]vlcCode) int {
-	// Fast path: buffer has at least 16 bits and no marker hit
-	if d.bufBits >= 16 && !d.markerHit {
-		value16 := int((d.buf >> (d.bufBits - 16)) & 0xFFFF)
-		entry := vlc[value16]
-		huffBits := int(entry.bits)
-
-		if huffBits > 0 && d.bufBits >= huffBits {
-			d.bufBits -= huffBits
-			return int(entry.code)
-		}
+// getHuffSymbol decodes a Huffman symbol from the bitstream without reading
+// subsequent value bits. It returns 0 (EOB) if no valid code is found.
+func (d *decoder) getHuffSymbol(t *huffTable) int {
+	if d.bufBits < 16 && !d.markerHit {
+		d.showBits(16)
 	}
 
-	// Slow path - fill buffer and lookup
-	d.showBits(16)
-
-	// Try lookup with current buffer state
+	var look uint32
 	if d.bufBits >= 16 {
-		value16 := int((d.buf >> (d.bufBits - 16)) & 0xFFFF)
-		entry := vlc[value16]
-		if entry.bits > 0 {
-			d.bufBits -= int(entry.bits)
-			return int(entry.code)
-		}
+		look = uint32((d.buf >> (d.bufBits - 16)) & 0xFFFF)
 	} else if d.bufBits > 0 {
-		// Buffer underfilled - left-align and pad
-		shift := 16 - d.bufBits
-		value16 := int((d.buf << shift) | uint64((1<<shift)-1))
-		entry := vlc[value16&0xFFFF]
-		if entry.bits > 0 && int(entry.bits) <= d.bufBits {
-			d.bufBits -= int(entry.bits)
-			return int(entry.code)
+		sh := uint(16 - d.bufBits)
+		look = uint32(((d.buf << sh) | ((uint64(1) << sh) - 1)) & 0xFFFF)
+	} else {
+		return 0
+	}
+
+	var huffBits int
+	var huffCode uint8
+	if e := t.lut[look>>8]; e != 0 {
+		huffBits = int(e & 0xFF)
+		huffCode = uint8(e >> 8)
+	} else {
+		var ok bool
+		huffBits, huffCode, ok = t.decodeLong(look)
+		if !ok {
+			return 0
 		}
 	}
 
-	// Return 0 (EOB) if no valid code found
-	return 0
+	if d.bufBits < huffBits {
+		return 0
+	}
+
+	d.bufBits -= huffBits
+
+	return int(huffCode)
 }
 
 // decodeBlock decodes a single 8x8 block of a component (Baseline).
@@ -54,13 +53,11 @@ func (d *decoder) decodeBlock(c *component, outOffset int) {
 	// Cache pointers to tables used in the loop.
 	// Quantization table is stored in natural order (row-major), not zigzag.
 	qt := d.qtab[c.qtSel]
-	dcVLC := d.dcVlcTab[c.dcTabSel]
-	dcVLC8 := d.dcVlcTab8[c.dcTabSel]
-	acVLC := d.acVlcTab[c.acTabSel]
-	acVLC8 := d.acVlcTab8[c.acTabSel]
+	dcHuff := d.dcHuff[c.dcTabSel]
+	acHuff := d.acHuff[c.acTabSel]
 
 	// Decode DC coefficient.
-	value = d.getVLC(dcVLC, dcVLC8, nil)
+	value = d.getVLC(dcHuff, nil)
 	// Note: Baseline scans should generally not hit markers during getVLC unexpectedly.
 	// If they do, we might proceed with potentially corrupted data if d.markerHit isn't checked here.
 
@@ -70,7 +67,7 @@ func (d *decoder) decodeBlock(c *component, outOffset int) {
 	// Decode AC coefficients.
 	coef := 1 // coef is the zigzag index.
 	for coef <= 63 {
-		value = d.getVLC(acVLC, acVLC8, &code)
+		value = d.getVLC(acHuff, &code)
 
 		if code == 0 { // EOB (also handles graceful termination at EOF)
 			break
@@ -269,9 +266,7 @@ func (d *decoder) decodeScanProgressiveDC(nCompScan int, scanComp [4]int, ah, al
 					var diff int
 
 					// Try to decode the DC coefficient
-					dcVLC := d.dcVlcTab[c.dcTabSel]
-					dcVLC8 := d.dcVlcTab8[c.dcTabSel]
-					diff = d.getVLC(dcVLC, dcVLC8, nil)
+					diff = d.getVLC(d.dcHuff[c.dcTabSel], nil)
 
 					// Always update predictor and store coefficient
 					c.dcPred += diff
@@ -339,9 +334,7 @@ func (d *decoder) decodeScanProgressiveDC(nCompScan int, scanComp [4]int, ah, al
 								diff = 0
 							} else {
 								// Try to decode the DC coefficient
-								dcVLC := d.dcVlcTab[c.dcTabSel]
-								dcVLC8 := d.dcVlcTab8[c.dcTabSel]
-								diff = d.getVLC(dcVLC, dcVLC8, nil)
+								diff = d.getVLC(d.dcHuff[c.dcTabSel], nil)
 							}
 
 							// Update predictor and store coefficient
@@ -378,68 +371,6 @@ func (d *decoder) decodeScanProgressiveDC(nCompScan int, scanComp [4]int, ah, al
 	d.alignAndRewind()
 
 	return nil
-}
-
-// decodeBlockDCProgressive decodes the DC coefficient (or refines it) for a progressive scan.
-func (d *decoder) decodeBlockDCProgressive(c *component, offset int, ah, al int) (diff int, terminated bool) {
-	// Check bounds
-	if offset+64 > len(c.coeffs) {
-		return 0, true // Terminate on bounds error
-	}
-
-	if ah == 0 {
-		// First pass - decode DC coefficient difference
-		dcVLC := d.dcVlcTab[c.dcTabSel]
-		dcVLC8 := d.dcVlcTab8[c.dcTabSel]
-
-		// Check for complete data exhaustion before attempting decode
-		if d.size == 0 && d.bufBits == 0 && !d.markerHit {
-			// Completely out of data - use zero difference but don't terminate
-			// Store with zero difference
-			c.coeffs[offset] = int32(c.dcPred) << al
-			return 0, false // Don't terminate, let caller continue with remaining blocks
-		}
-
-		// Try to decode
-		diff = d.getVLC(dcVLC, dcVLC8, nil)
-
-		// Check if marker was hit
-		if d.markerHit {
-			// Use zero difference for this block
-			c.coeffs[offset] = int32(c.dcPred) << al
-			return 0, false // Don't terminate immediately, process remaining blocks with zero
-		}
-
-		// Check if we got an incomplete code at EOF
-		if diff == 0 && d.size == 0 && d.bufBits < 16 && !d.markerHit {
-			// Likely incomplete code - use zero difference
-			c.coeffs[offset] = int32(c.dcPred) << al
-			return 0, false // Continue with remaining blocks
-		}
-
-		// Successfully decoded - update predictor and store
-		c.dcPred += diff
-		c.coeffs[offset] = int32(c.dcPred) << al
-
-		return diff, false
-	}
-
-	// Refinement pass
-	bit := d.getBit()
-
-	if bit < 0 {
-		if d.markerHit {
-			return 0, false // Don't terminate, skip refinement for remaining
-		}
-		// EOF - skip this block's refinement
-		return 0, false
-	}
-
-	if bit > 0 {
-		c.coeffs[offset] |= int32(1 << al)
-	}
-
-	return 0, false
 }
 
 // decodeScanBaseline decodes a baseline JPEG scan.
@@ -627,30 +558,23 @@ func (d *decoder) decodeBlockACFirst(c *component, offset, ss, se, al, blockInde
 		return
 	}
 
-	acVLC8 := d.acVlcTab8[c.acTabSel]
-	acVLC := d.acVlcTab[c.acTabSel]
+	acHuff := d.acHuff[c.acTabSel]
 	coefs := c.coeffs[offset : offset+64 : offset+64]
 
 	for k := ss; k <= se; {
-		// Ultra-fast path with 8-bit lookup (like stdlib)
+		// Ultra-fast path: 8-bit look-ahead, then the long-code path.
 		var symbol int
 
-		// Fast path: we have >=8 bits, no marker hit, and 8-bit table exists
-		if d.bufBits >= 8 && !d.markerHit && acVLC8 != nil {
-			value8 := uint8((d.buf >> (d.bufBits - 8)) & 0xFF)
-			entry := (*acVLC8)[value8]
-
-			if entry != 0 {
-				// Valid code found in 8-bit table
-				codeLen := int(entry&0xFF) - 1
-				d.bufBits -= codeLen
+		if d.bufBits >= 8 && !d.markerHit {
+			value8 := (d.buf >> (d.bufBits - 8)) & 0xFF
+			if entry := acHuff.lut[value8]; entry != 0 {
+				d.bufBits -= int(entry & 0xFF)
 				symbol = int(entry >> 8)
 			} else {
-				// Code longer than 8 bits, use slow path
-				symbol = d.getHuffSymbol(acVLC)
+				symbol = d.getHuffSymbol(acHuff)
 			}
 		} else {
-			symbol = d.getHuffSymbol(acVLC)
+			symbol = d.getHuffSymbol(acHuff)
 		}
 
 		s := symbol & 0x0F
@@ -715,19 +639,18 @@ func (d *decoder) decodeBlockACRefine(c *component, offset, ss, se, al, blockInd
 		return
 	}
 
-	acVLC := d.acVlcTab[c.acTabSel]
-	acVLC8 := d.acVlcTab8[c.acTabSel]
+	acHuff := d.acHuff[c.acTabSel]
 	delta := int32(1 << al)
 	coefs := c.coeffs[offset : offset+64 : offset+64]
 
-	if err := d.refineBlock(coefs, acVLC, acVLC8, int32(ss), int32(se), delta, blockIndex, remainingBlocks, false); err != nil {
+	if err := d.refineBlock(coefs, acHuff, int32(ss), int32(se), delta, blockIndex, remainingBlocks, false); err != nil {
 		// Error handling (e.g., if refineBlock returned an error, though currently it only returns nil)
 		return
 	}
 }
 
 // refineBlock implements progressive AC refinement working directly on coefficient slice.
-func (d *decoder) refineBlock(coefs []int32, vlc *[65536]vlcCode, vlc8 *[256]vlcCode8, zigStart, zigEnd, delta int32, blockIndex, remainingBlocks int, trace bool) error {
+func (d *decoder) refineBlock(coefs []int32, t *huffTable, zigStart, zigEnd, delta int32, blockIndex, remainingBlocks int, trace bool) error {
 	zig := zigStart
 
 	// This block is not in an EOB run, so decode its coefficient data.
@@ -741,19 +664,16 @@ loop:
 		// Ultra-fast path with 8-bit lookup
 		var symbol int
 
-		if d.bufBits >= 8 && !d.markerHit && vlc8 != nil {
-			value8 := uint8((d.buf >> (d.bufBits - 8)) & 0xFF)
-			entry := (*vlc8)[value8]
-
-			if entry != 0 {
-				codeLen := int(entry&0xFF) - 1
-				d.bufBits -= codeLen
+		if d.bufBits >= 8 && !d.markerHit {
+			value8 := (d.buf >> (d.bufBits - 8)) & 0xFF
+			if entry := t.lut[value8]; entry != 0 {
+				d.bufBits -= int(entry & 0xFF)
 				symbol = int(entry >> 8)
 			} else {
-				symbol = d.getHuffSymbol(vlc)
+				symbol = d.getHuffSymbol(t)
 			}
 		} else {
-			symbol = d.getHuffSymbol(vlc)
+			symbol = d.getHuffSymbol(t)
 		}
 
 		// If getHuffSymbol hit a marker, it might return 0 or a partial symbol. We proceed.
@@ -861,38 +781,6 @@ loop:
 	}
 
 	return nil
-}
-
-// refineNonZeroes implements progressive AC refinement for existing nonzero coefficients.
-func (d *decoder) refineNonZeroes(coefs []int32, zig, zigEnd, nz, delta int32, blockIndex int, trace bool) (int32, error) {
-	for zig <= zigEnd {
-		u := zz[zig]
-		if coefs[u] == 0 {
-			if nz == 0 {
-				break
-			}
-			nz--
-		} else {
-			bit := d.getBit()
-
-			// Check markerHit after getBit.
-			if d.markerHit {
-				return zig, nil
-			}
-
-			if bit != 0 {
-				if coefs[u] >= 0 {
-					coefs[u] += delta
-				} else {
-					coefs[u] -= delta
-				}
-			}
-		}
-
-		zig++
-	}
-
-	return zig, nil
 }
 
 // refineBlockEOB refines existing non-zero coefficients in a block during EOB run processing

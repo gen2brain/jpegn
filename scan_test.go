@@ -242,14 +242,14 @@ func BenchmarkGetVLC(b *testing.B) {
 		b.Fatalf("Failed to skip to scan: %v", err)
 	}
 
-	// Now d.buf should have bitstream data and d.acVlcTab/dcVlcTab should be initialized
+	// Now d.buf should have bitstream data and the Huffman tables initialized.
 	// Fill the bit buffer
 	d.showBits(16)
 
-	// Use the AC VLC table (most commonly used in baseline JPEGs)
-	vlc := d.acVlcTab[0]
+	// Use the AC Huffman table (most commonly used in baseline JPEGs)
+	vlc := d.acHuff[0]
 	if vlc == nil {
-		b.Fatal("AC VLC table not initialized")
+		b.Fatal("AC Huffman table not initialized")
 	}
 
 	b.ResetTimer()
@@ -265,7 +265,7 @@ func BenchmarkGetVLC(b *testing.B) {
 			d.showBits(16)
 		}
 
-		result = d.getVLC(vlc, nil, &code)
+		result = d.getVLC(vlc, &code)
 	}
 
 	// Prevent compiler optimization
