@@ -265,6 +265,39 @@ func TestDecodeProgressiveOddDimensions(t *testing.T) {
 	}
 }
 
+// TestDecodeCorruptedRestartRecovery verifies that a baseline image with a
+// corrupt restart interval recovers by resyncing to later restart markers,
+// decoding the bulk of the image instead of stopping at the first error.
+func TestDecodeCorruptedRestartRecovery(t *testing.T) {
+	img, err := Decode(bytes.NewReader(testCorrupted10))
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+
+	yc, ok := img.(*image.YCbCr)
+	if !ok {
+		t.Fatalf("expected *image.YCbCr, got %T", img)
+	}
+
+	b := yc.Bounds()
+	lastNonZero := -1
+	for y := 0; y < b.Dy(); y++ {
+		row := yc.Y[y*yc.YStride : y*yc.YStride+b.Dx()]
+		for _, v := range row {
+			if v != 0 {
+				lastNonZero = y
+
+				break
+			}
+		}
+	}
+
+	// libjpeg recovers essentially the whole image; require at least 90%.
+	if min := b.Dy() * 9 / 10; lastNonZero < min {
+		t.Errorf("only recovered up to row %d of %d; expected >= %d", lastNonZero, b.Dy(), min)
+	}
+}
+
 // TestDecodeHugeDimensions verifies a corrupt oversized SOF is rejected, not OOM'd.
 func TestDecodeHugeDimensions(t *testing.T) {
 	// SOI + SOF0 declaring 65535x65535, 1 component.

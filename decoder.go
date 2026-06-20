@@ -541,6 +541,53 @@ func (d *decoder) processRestart(nextRst *int, rstCount *int, ah int, nCompScan 
 	return false
 }
 
+// resyncToRestart recovers a corrupt baseline scan by scanning forward for the
+// next RSTn marker, skipping any intervening entropy data or fill bytes, and
+// resetting the entropy state. It returns false at EOF or on a non-restart marker.
+func (d *decoder) resyncToRestart(nextRst *int) bool {
+	// Byte-align and rewind d.pos to the actual consumed position.
+	d.byteAlign()
+	if bufferedBytes := d.bufBits / 8; bufferedBytes > 0 {
+		d.pos -= bufferedBytes
+		d.size += bufferedBytes
+	}
+	d.buf = 0
+	d.bufBits = 0
+
+	for d.size >= 2 {
+		if d.jpegData[d.pos] == 0xFF {
+			m := d.jpegData[d.pos+1]
+			if m >= 0xD0 && m <= 0xD7 {
+				d.pos += 2
+				d.size -= 2
+				*nextRst = (int(m&0x07) + 1) & 7
+				d.markerHit = false
+				d.eobRun = 0
+
+				for k := 0; k < d.ncomp; k++ {
+					d.comp[k].dcPred = 0
+				}
+
+				return true
+			}
+
+			// A non-restart marker (EOI, SOS, ...) ends the entropy data.
+			if m != 0x00 && m != 0xFF {
+				d.markerHit = true
+
+				return false
+			}
+		}
+
+		d.pos++
+		d.size--
+	}
+
+	d.markerHit = true
+
+	return false
+}
+
 // resetForConfig clears the decoder state for config-only decoding.
 // This skips expensive VLC table initialization since config-only decoding doesn't need Huffman tables.
 func (d *decoder) resetForConfig() {

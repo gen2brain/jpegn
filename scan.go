@@ -444,9 +444,6 @@ func (d *decoder) decodeBlockDCProgressive(c *component, offset int, ah, al int)
 
 // decodeScanBaseline decodes a baseline JPEG scan.
 func (d *decoder) decodeScanBaseline(nCompScan int, scanComp [4]int) error {
-	rstCount := d.rstInterval
-	nextRst := 0
-
 	// Reset DC predictors at the start of the scan.
 	for k := 0; k < d.ncomp; k++ {
 		d.comp[k].dcPred = 0
@@ -459,54 +456,26 @@ func (d *decoder) decodeScanBaseline(nCompScan int, scanComp [4]int) error {
 	outBlockW := 8 / d.scaleDenom
 	outBlockH := 8 / d.scaleDenom
 
-	for mby := 0; mby < d.mbHeight; mby++ {
-		for mbx := 0; mbx < d.mbWidth; mbx++ {
-			for i := 0; i < nCompScan; i++ {
-				compIndex := scanComp[i]
-				c := &d.comp[compIndex]
+	decodeMCU := func(mbx, mby int) {
+		for i := 0; i < nCompScan; i++ {
+			c := &d.comp[scanComp[i]]
 
-				for sby := 0; sby < c.ssY; sby++ {
-					for sbx := 0; sbx < c.ssX; sbx++ {
-						// Compute offset for scaled output blocks
-						rowStart := (mby*c.ssY + sby) * outBlockH * c.stride
-						colStart := (mbx*c.ssX + sbx) * outBlockW
-						offset := rowStart + colStart
-
-						d.decodeBlock(c, offset)
-					}
+			for sby := 0; sby < c.ssY; sby++ {
+				for sbx := 0; sbx < c.ssX; sbx++ {
+					rowStart := (mby*c.ssY + sby) * outBlockH * c.stride
+					colStart := (mbx*c.ssX + sbx) * outBlockW
+					d.decodeBlock(c, rowStart+colStart)
 				}
 			}
+		}
+	}
 
-			// Handle restart markers.
-			if d.rstInterval != 0 {
-				rstCount--
-				if rstCount == 0 {
-					// Per spec, the bitstream is byte-aligned before a restart marker.
-					// We reset the bit buffer; d.pos is already at the correct byte boundary.
-					d.buf = 0
-					d.bufBits = 0
-
-					// Read the restart marker directly from the byte stream.
-					if d.size < 2 {
-						d.panic(ErrSyntax)
-					}
-
-					if d.jpegData[d.pos] != 0xFF || (d.jpegData[d.pos+1]&0xF8) != 0xD0 || int(d.jpegData[d.pos+1]&0x07) != nextRst {
-						d.panic(ErrSyntax)
-					}
-
-					// Consume marker bytes.
-					d.pos += 2
-					d.size -= 2
-
-					// Reset state for the next interval.
-					nextRst = (nextRst + 1) & 7
-					rstCount = d.rstInterval
-
-					for k := 0; k < d.ncomp; k++ {
-						d.comp[k].dcPred = 0
-					}
-				}
+	if d.rstInterval > 0 {
+		d.decodeScanBaselineRestart(decodeMCU)
+	} else {
+		for mby := 0; mby < d.mbHeight; mby++ {
+			for mbx := 0; mbx < d.mbWidth; mbx++ {
+				decodeMCU(mbx, mby)
 			}
 		}
 	}
@@ -515,6 +484,52 @@ func (d *decoder) decodeScanBaseline(nCompScan int, scanComp [4]int) error {
 	d.alignAndRewind()
 
 	return nil
+}
+
+// decodeScanBaselineRestart decodes a baseline scan that uses restart intervals.
+// A corrupt interval is recovered by resyncing to the next restart marker rather
+// than aborting the whole image (libjpeg-style error concealment).
+func (d *decoder) decodeScanBaselineRestart(decodeMCU func(mbx, mby int)) {
+	total := d.mbWidth * d.mbHeight
+	nextRst := 0
+
+	for mcu := 0; mcu < total; {
+		end := mcu + d.rstInterval
+		if end > total {
+			end = total
+		}
+
+		mcu = d.decodeBaselineInterval(mcu, end, decodeMCU)
+		if mcu >= total {
+			break
+		}
+
+		if !d.resyncToRestart(&nextRst) {
+			break
+		}
+	}
+}
+
+// decodeBaselineInterval decodes MCUs [start, end), recovering from an entropy
+// error by abandoning the rest of the interval. It returns the next MCU index.
+func (d *decoder) decodeBaselineInterval(start, end int, decodeMCU func(mbx, mby int)) (next int) {
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(errDecode); ok {
+				next = end
+
+				return
+			}
+
+			panic(r)
+		}
+	}()
+
+	for mcu := start; mcu < end; mcu++ {
+		decodeMCU(mcu%d.mbWidth, mcu/d.mbWidth)
+	}
+
+	return end
 }
 
 // decodeScanProgressiveAC handles an AC scan in a progressive JPEG.
