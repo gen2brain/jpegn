@@ -2,8 +2,94 @@ package jpegn
 
 import (
 	"bytes"
+	"math/rand"
 	"testing"
 )
+
+// makeUpsampleComponent builds a component with deterministic pseudo-random
+// pixels and an optional stride padding (stride >= width).
+func makeUpsampleComponent(w, h, stride int) *component {
+	pix := make([]byte, stride*h)
+	r := rand.New(rand.NewSource(int64(w*131 + h*17 + stride)))
+	for i := range pix {
+		pix[i] = byte(r.Intn(256))
+	}
+
+	return &component{width: w, height: h, stride: stride, pixels: pix}
+}
+
+// TestUpsampleCatmullRomAssembly compares the (possibly SIMD-accelerated)
+// horizontal and vertical Catmull-Rom upsamplers against the scalar reference
+// across sizes that exercise the vectorized middle path, its scalar tail, and
+// the edge handling.
+func TestUpsampleCatmullRomAssembly(t *testing.T) {
+	cases := []struct{ w, h, stride int }{
+		{3, 3, 3},
+		{8, 8, 8},
+		{11, 4, 11},
+		{16, 5, 16},
+		{19, 7, 19},
+		{23, 9, 23},
+		{31, 3, 31},
+		{32, 32, 32},
+		{33, 6, 33},
+		{64, 17, 64},
+		{100, 8, 128}, // stride > width
+		{487, 5, 496},
+	}
+
+	for _, tc := range cases {
+		name := tc2name(tc.w, tc.h, tc.stride)
+
+		t.Run("H/"+name, func(t *testing.T) {
+			got := makeUpsampleComponent(tc.w, tc.h, tc.stride)
+			want := cloneComponent(got)
+
+			upsampleH(got)
+			upsampleHScalar(want)
+
+			if got.width != want.width || got.stride != want.stride || got.height != want.height {
+				t.Fatalf("dim mismatch: got %dx%d stride %d, want %dx%d stride %d", got.width, got.height, got.stride, want.width, want.height, want.stride)
+			}
+			isEqual(t, got.pixels, want.pixels, "upsampleH "+name)
+		})
+
+		t.Run("V/"+name, func(t *testing.T) {
+			got := makeUpsampleComponent(tc.w, tc.h, tc.stride)
+			want := cloneComponent(got)
+
+			upsampleV(got)
+			upsampleVScalar(want)
+
+			if got.width != want.width || got.stride != want.stride || got.height != want.height {
+				t.Fatalf("dim mismatch: got %dx%d stride %d, want %dx%d stride %d", got.width, got.height, got.stride, want.width, want.height, want.stride)
+			}
+			isEqual(t, got.pixels, want.pixels, "upsampleV "+name)
+		})
+	}
+}
+
+func cloneComponent(c *component) *component {
+	return &component{width: c.width, height: c.height, stride: c.stride, pixels: append([]byte(nil), c.pixels...)}
+}
+
+func tc2name(w, h, stride int) string {
+	return itoa(w) + "x" + itoa(h) + "_s" + itoa(stride)
+}
+
+func itoa(v int) string {
+	if v == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for v > 0 {
+		i--
+		b[i] = byte('0' + v%10)
+		v /= 10
+	}
+	return string(b[i:])
+}
 
 // isEqual is a helper function to compare two byte slices and report differences.
 func isEqual(t *testing.T, got, want []byte, context string) {

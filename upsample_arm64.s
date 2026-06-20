@@ -112,3 +112,111 @@ after_copy:
 
     RET
     
+// Catmull-Rom 2x upsampling (NEON middle-loop kernels).
+//
+// These kernels accelerate only the vectorizable interior of each row (H) or
+// column strip (V); the three-sample boundaries and the sub-block tail are
+// handled by the shared scalar helpers in upsample_noasm.go. Each invocation
+// processes 8 samples per iteration with the 4-tap filter
+//   O1 = (A*p0 + B*p1 + C*p2 + D*p3 + 64) >> 7
+//   O2 = (D*p0 + C*p1 + B*p2 + A*p3 + 64) >> 7   (A=-9 B=111 C=29 D=-3)
+// in 32-bit lanes, then clamps to [0,255] via unsigned-saturating narrowing.
+//
+// Coefficients live in V16(A) V17(B) V18(C) V19(D) V20(64). The 32-bit-lane
+// VMUL, signed SSHR and UQXTN/SQXTUN narrowing are emitted as WORD directives
+// (the Go assembler does not accept these mnemonics).
+
+// FILTER8 consumes p0..p3 byte vectors in V0..V3 and produces O1 in V5.8B and
+// O2 in V6.8B. Clobbers V4, V7, V8-V15, V21-V25.
+#define FILTER8() \
+	VUXTL V0.B8, V4.H8; VUXTL V4.H4, V8.S4; VUXTL2 V4.H8, V9.S4;    \
+	VUXTL V1.B8, V4.H8; VUXTL V4.H4, V10.S4; VUXTL2 V4.H8, V11.S4;  \
+	VUXTL V2.B8, V4.H8; VUXTL V4.H4, V12.S4; VUXTL2 V4.H8, V13.S4;  \
+	VUXTL V3.B8, V4.H8; VUXTL V4.H4, V14.S4; VUXTL2 V4.H8, V15.S4;  \
+	WORD $0x4EB09D15; WORD $0x4EB19D56; VADD V22.S4, V21.S4, V21.S4; \
+	WORD $0x4EB29D96; VADD V22.S4, V21.S4, V21.S4;                  \
+	WORD $0x4EB39DD6; VADD V22.S4, V21.S4, V21.S4; VADD V20.S4, V21.S4, V21.S4; \
+	WORD $0x4F3906B5;                                               \
+	WORD $0x4EB09D36; WORD $0x4EB19D77; VADD V23.S4, V22.S4, V22.S4; \
+	WORD $0x4EB29DB7; VADD V23.S4, V22.S4, V22.S4;                  \
+	WORD $0x4EB39DF7; VADD V23.S4, V22.S4, V22.S4; VADD V20.S4, V22.S4, V22.S4; \
+	WORD $0x4F3906D6;                                               \
+	WORD $0x2E614AA7; WORD $0x6E614AC7; WORD $0x2E2128E5;           \
+	WORD $0x4EB39D17; WORD $0x4EB29D58; VADD V24.S4, V23.S4, V23.S4; \
+	WORD $0x4EB19D98; VADD V24.S4, V23.S4, V23.S4;                  \
+	WORD $0x4EB09DD8; VADD V24.S4, V23.S4, V23.S4; VADD V20.S4, V23.S4, V23.S4; \
+	WORD $0x4F3906F7;                                               \
+	WORD $0x4EB39D38; WORD $0x4EB29D79; VADD V25.S4, V24.S4, V24.S4; \
+	WORD $0x4EB19DB9; VADD V25.S4, V24.S4, V24.S4;                  \
+	WORD $0x4EB09DF9; VADD V25.S4, V24.S4, V24.S4; VADD V20.S4, V24.S4, V24.S4; \
+	WORD $0x4F390718;                                               \
+	WORD $0x2E614AE7; WORD $0x6E614B07; WORD $0x2E2128E6
+
+// LOAD_COEFFS broadcasts the filter coefficients into V16-V20.
+#define LOAD_COEFFS() \
+	MOVD $-9, R3;  VDUP R3, V16.S4; \
+	MOVD $111, R3; VDUP R3, V17.S4; \
+	MOVD $29, R3;  VDUP R3, V18.S4; \
+	MOVD $-3, R3;  VDUP R3, V19.S4; \
+	MOVD $64, R3;  VDUP R3, V20.S4
+
+// func upsampleHMiddleNEON(dst, src unsafe.Pointer, n int)
+// Writes 2*n interleaved interior samples. n is a multiple of 8. For input
+// position i, p0..p3 are src[i..i+3]; outputs O1,O2 are stored interleaved.
+TEXT ·upsampleHMiddleNEON(SB), NOSPLIT, $0-24
+	MOVD dst+0(FP), R0
+	MOVD src+8(FP), R1
+	MOVD n+16(FP), R2
+	LOAD_COEFFS()
+
+h_mid_loop:
+	CMP $8, R2
+	BLT h_mid_done
+
+	VLD1 (R1), [V0.B8]
+	ADD  $1, R1, R4; VLD1 (R4), [V1.B8]
+	ADD  $2, R1, R4; VLD1 (R4), [V2.B8]
+	ADD  $3, R1, R4; VLD1 (R4), [V3.B8]
+
+	FILTER8()
+
+	VST2.P [V5.B8, V6.B8], 16(R0)
+
+	ADD $8, R1
+	SUB $8, R2
+	B   h_mid_loop
+
+h_mid_done:
+	RET
+
+// func upsampleVMiddleNEON(dst1, dst2, src unsafe.Pointer, stride, n int)
+// Writes n samples to each of two output rows. n is a multiple of 8. p0..p3 are
+// the four source rows src, src+stride, src+2*stride, src+3*stride.
+TEXT ·upsampleVMiddleNEON(SB), NOSPLIT, $0-40
+	MOVD dst1+0(FP), R0
+	MOVD dst2+8(FP), R1
+	MOVD src+16(FP), R2
+	MOVD stride+24(FP), R7
+	MOVD n+32(FP), R6
+	LOAD_COEFFS()
+
+v_mid_loop:
+	CMP $8, R6
+	BLT v_mid_done
+
+	VLD1 (R2), [V0.B8]
+	ADD  R7, R2, R5; VLD1 (R5), [V1.B8]
+	ADD  R7, R5, R5; VLD1 (R5), [V2.B8]
+	ADD  R7, R5, R5; VLD1 (R5), [V3.B8]
+
+	FILTER8()
+
+	VST1.P [V5.B8], 8(R0)
+	VST1.P [V6.B8], 8(R1)
+
+	ADD $8, R2
+	SUB $8, R6
+	B   v_mid_loop
+
+v_mid_done:
+	RET
