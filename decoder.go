@@ -1,6 +1,7 @@
 package jpegn
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"image"
@@ -1659,70 +1660,72 @@ func (d *decoder) convertToCMYK() (image.Image, error) {
 // Individual fields in the returned Exif struct may be zero/empty if those specific
 // tags are not present in the EXIF data.
 func DecodeExif(r io.Reader) (*Exif, error) {
-	// Read all data into memory (similar to DecodeConfig approach)
-	data, err := readAllData(r)
-	if err != nil {
-		return nil, err
-	}
+	br := bufio.NewReader(r)
 
-	// Check for SOI marker
-	if len(data) < 2 || data[0] != 0xFF || data[1] != 0xD8 {
+	var soi [2]byte
+	if _, err := io.ReadFull(br, soi[:]); err != nil {
+		return nil, ErrSyntax
+	}
+	if soi[0] != 0xFF || soi[1] != 0xD8 {
 		return nil, ErrSyntax
 	}
 
 	exif := &Exif{}
-	pos := 2
-	foundExif := false
 
-	// Scan through JPEG markers looking for APP1 (EXIF)
-	for pos+1 < len(data) {
-		if data[pos] != 0xFF {
+	for {
+		b, err := br.ReadByte()
+		if err != nil {
+			return nil, ErrNoEXIF
+		}
+		if b != 0xFF {
 			return nil, ErrSyntax
 		}
 
-		marker := data[pos+1]
-		pos += 2
-
-		// Check for markers without length field
-		if marker == 0xD8 || marker == 0xD9 || (marker >= 0xD0 && marker <= 0xD7) {
-			continue
+		marker, err := br.ReadByte()
+		if err != nil {
+			return nil, ErrNoEXIF
 		}
-
-		// Read segment length
-		if pos+1 >= len(data) {
-			break
-		}
-		length := int(data[pos])<<8 | int(data[pos+1])
-		if length < 2 {
-			return nil, ErrSyntax
-		}
-		length -= 2 // Exclude the length bytes themselves
-		pos += 2
-
-		if pos+length > len(data) {
-			break
-		}
-
-		// Found APP1 marker (EXIF)
-		if marker == 0xE1 && length >= 6 {
-			// Check for "Exif\0\0" signature
-			if data[pos] == 'E' && data[pos+1] == 'x' && data[pos+2] == 'i' &&
-				data[pos+3] == 'f' && data[pos+4] == 0 && data[pos+5] == 0 {
-				// Parse EXIF data
-				if err := parseExifData(data[pos+6:pos+length], exif); err != nil {
-					return nil, err
-				}
-				foundExif = true
-				break
+		for marker == 0xFF {
+			if marker, err = br.ReadByte(); err != nil {
+				return nil, ErrNoEXIF
 			}
 		}
 
-		pos += length
-	}
+		// Standalone markers carry no length field.
+		if marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7) {
+			continue
+		}
+		// Start of scan or end of image: no metadata beyond here.
+		if marker == 0xDA || marker == 0xD9 {
+			return nil, ErrNoEXIF
+		}
 
-	if !foundExif {
-		return nil, ErrNoEXIF
-	}
+		var lb [2]byte
+		if _, err := io.ReadFull(br, lb[:]); err != nil {
+			return nil, ErrNoEXIF
+		}
+		length := int(lb[0])<<8 | int(lb[1])
+		if length < 2 {
+			return nil, ErrSyntax
+		}
+		length -= 2
 
-	return exif, nil
+		if marker == 0xE1 && length >= 6 {
+			seg := make([]byte, length)
+			if _, err := io.ReadFull(br, seg); err != nil {
+				return nil, ErrNoEXIF
+			}
+			if seg[0] == 'E' && seg[1] == 'x' && seg[2] == 'i' && seg[3] == 'f' && seg[4] == 0 && seg[5] == 0 {
+				if err := parseExifData(seg[6:], exif); err != nil {
+					return nil, err
+				}
+				return exif, nil
+			}
+			continue
+		}
+
+		if _, err := io.CopyN(io.Discard, br, int64(length)); err != nil {
+			return nil, ErrNoEXIF
+		}
+	}
 }
