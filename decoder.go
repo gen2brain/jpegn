@@ -36,7 +36,7 @@ type decoder struct {
 	ncomp               int                       // Number of color components (1 for grayscale, 3 for color, 4 for CMYK).
 	comp                [4]component              // Array to hold data for each color component.
 	qtUsed, qtAvail     int                       // Bitmasks tracking used and available quantization tables.
-	qtab                [4]*[64]uint8             // Pointers for pooling. Stored in zigzag order.
+	qtab                [4]*[64]uint16            // Pointers for pooling. Stored in zigzag order; 8- or 16-bit values.
 	dcHuff              [4]*huffTable             // DC Huffman tables (indices 0-3).
 	acHuff              [4]*huffTable             // AC Huffman tables (indices 0-3).
 	buf                 uint64                    // Use uint64 for fewer refills.
@@ -192,7 +192,7 @@ func clamp(x int32) byte {
 func newDecoder() *decoder {
 	d := new(decoder)
 	for i := 0; i < 4; i++ {
-		d.qtab[i] = new([64]uint8)
+		d.qtab[i] = new([64]uint16)
 		d.dcHuff[i] = new(huffTable)
 		d.acHuff[i] = new(huffTable)
 	}
@@ -417,7 +417,7 @@ func (d *decoder) reset() {
 
 	// Clear the quantization tables to prevent state leakage between decodes.
 	for i := range d.qtab {
-		*d.qtab[i] = [64]uint8{}
+		*d.qtab[i] = [64]uint16{}
 	}
 
 	// Since tables are pooled and might have been overwritten by a previous DHT,
@@ -1085,46 +1085,51 @@ func (d *decoder) decodeDQT() error {
 		return d.skip(d.size)
 	}
 
-	for d.length >= 65 {
-		// Bounds check before reading
-		if d.pos+65 > len(d.jpegData) {
-			// Not enough data, skip what we can
+	for d.length > 0 {
+		if d.pos >= len(d.jpegData) {
 			return d.skip(d.length)
 		}
 
-		i := int(d.jpegData[d.pos])
+		pq := int(d.jpegData[d.pos]) >> 4   // Precision: 0 = 8-bit values, 1 = 16-bit values.
+		tq := int(d.jpegData[d.pos]) & 0x0F // Table destination identifier.
 
-		// Check precision (Pq). Must be 8-bit (Pq=0).
-		if (i >> 4) != 0 {
-			return ErrUnsupported // 16-bit quantization tables not supported.
-		}
-
-		i &= 0x0F // Tq (Table destination identifier)
-
-		if i > 3 {
+		if pq > 1 || tq > 3 {
 			return ErrSyntax
 		}
 
-		d.qtAvail |= 1 << i
-		t := d.qtab[i]
+		// A table is one header byte plus 64 8-bit or 128 16-bit values.
+		size := 65
+		if pq == 1 {
+			size = 129
+		}
+
+		if d.length < size {
+			return ErrSyntax
+		}
+		if d.pos+size > len(d.jpegData) {
+			return d.skip(d.length)
+		}
+
+		d.qtAvail |= 1 << tq
+		t := d.qtab[tq]
 
 		// Pooling: Clear the table before filling it.
-		*t = [64]uint8{}
+		*t = [64]uint16{}
 
 		for j := 0; j < 64; j++ {
-			// Read value in zigzag order from the stream (j).
-			val := d.jpegData[d.pos+j+1]
-			// Store in natural order (zz[j]) for faster access during dequantization.
+			// Read value in zigzag order from the stream, store in natural order for dequantization.
+			var val uint16
+			if pq == 0 {
+				val = uint16(d.jpegData[d.pos+1+j])
+			} else {
+				val = uint16(d.jpegData[d.pos+1+2*j])<<8 | uint16(d.jpegData[d.pos+2+2*j])
+			}
 			t[zz[j]] = val
 		}
 
-		if err := d.skip(65); err != nil {
+		if err := d.skip(size); err != nil {
 			return err
 		}
-	}
-
-	if d.length != 0 {
-		return ErrSyntax
 	}
 
 	return nil

@@ -22,6 +22,9 @@ var test420odd []byte
 //go:embed testdata/test.420.progressive.odd.jpg
 var test420progOdd []byte
 
+//go:embed testdata/test.420.dqt16.jpg
+var test420dqt16 []byte
+
 //go:embed testdata/test.422.jpg
 var test422 []byte
 
@@ -971,11 +974,11 @@ func BenchmarkDecodeToRGBAStdLib(b *testing.B) {
 func TestDecodeConfigAllImages(t *testing.T) {
 	// Map of all test images with expected dimensions and color models
 	testCases := []struct {
-		name        string
-		data        []byte
-		width       int
-		height      int
-		colorModel  color.Model
+		name       string
+		data       []byte
+		width      int
+		height     int
+		colorModel color.Model
 	}{
 		{"1x1", test1x1, 1, 1, color.GrayModel},
 		{"410", nil, 0, 0, color.YCbCrModel},
@@ -1073,5 +1076,31 @@ func TestDecodeConfigAllImages(t *testing.T) {
 
 			t.Logf("%s: Successfully decoded config: %dx%d", name, cfg.Width, cfg.Height)
 		})
+	}
+}
+
+// TestDecode16BitDQT decodes a JPEG with 16-bit quantization tables (Pq=1) and checks it matches the 8-bit original.
+func TestDecode16BitDQT(t *testing.T) {
+	img, err := Decode(bytes.NewReader(test420dqt16), &Options{ToRGBA: true})
+	if err != nil {
+		t.Fatalf("Decode failed for 16-bit DQT image: %v", err)
+	}
+
+	ref, err := Decode(bytes.NewReader(test420), &Options{ToRGBA: true})
+	if err != nil {
+		t.Fatalf("Decode failed for 8-bit DQT image: %v", err)
+	}
+
+	if img.Bounds() != ref.Bounds() {
+		t.Fatalf("bounds mismatch: got %v, want %v", img.Bounds(), ref.Bounds())
+	}
+
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if img.At(x, y) != ref.At(x, y) {
+				t.Fatalf("pixel (%d,%d) differs between 16-bit and 8-bit DQT decode", x, y)
+			}
+		}
 	}
 }
