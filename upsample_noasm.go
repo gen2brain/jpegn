@@ -75,7 +75,6 @@ func upsampleHScalar(c *component) {
 	newWidth := c.width << 1
 	out := make([]byte, newWidth*c.height)
 
-	// The SOF decoder guarantees width >= 3 if upsampling is required.
 	for y := 0; y < c.height; y++ {
 		in := c.pixels[y*c.stride:]
 		o := out[y*newWidth:]
@@ -148,7 +147,6 @@ func upsampleVScalar(c *component) {
 
 	out := make([]byte, w*newHeight)
 
-	// The SOF decoder guarantees height >= 3 if upsampling is required.
 	upsampleVTopEdge(c.pixels, out, w, stride)
 
 	for y := 0; y < c.height-3; y++ {
@@ -239,7 +237,6 @@ func upsampleNearestNeighborScalar(c *component, width, height int) {
 	c.height = tempHeight
 
 	out := make([]byte, c.width*c.height)
-
 	for y := 0; y < c.height; y++ {
 		// Find the source row by right-shifting y
 		lin := c.pixels[(y>>yShift)*c.stride:]

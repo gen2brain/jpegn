@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
+	"math"
 	"testing"
 )
 
@@ -33,6 +34,12 @@ var test440 []byte
 
 //go:embed testdata/test.444.jpg
 var test444 []byte
+
+//go:embed testdata/test.420.tiny.jpg
+var test420tiny []byte
+
+//go:embed testdata/test.420.strip.jpg
+var test420strip []byte
 
 //go:embed testdata/test.cmyk.jpg
 var testCMYK []byte
@@ -133,6 +140,36 @@ var baselineGray2x2 = []byte{
 
 	// EOI: End of Image
 	0xd9,
+}
+
+// psnr returns the peak signal-to-noise ratio in dB over the RGB channels.
+func psnr(a, b image.Image) float64 {
+	ra, rb := a.Bounds(), b.Bounds()
+	w := min(ra.Dx(), rb.Dx())
+	h := min(ra.Dy(), rb.Dy())
+
+	var sum float64
+	var n int
+
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			r1, g1, b1, _ := a.At(ra.Min.X+x, ra.Min.Y+y).RGBA()
+			r2, g2, b2, _ := b.At(rb.Min.X+x, rb.Min.Y+y).RGBA()
+
+			dr := float64(int32(r1>>8) - int32(r2>>8))
+			dg := float64(int32(g1>>8) - int32(g2>>8))
+			db := float64(int32(b1>>8) - int32(b2>>8))
+
+			sum += dr*dr + dg*dg + db*db
+			n += 3
+		}
+	}
+
+	if sum == 0 {
+		return math.Inf(1)
+	}
+
+	return 10 * math.Log10(255*255/(sum/float64(n)))
 }
 
 // A small tolerance is needed to account for differences in IDCT implementations.
@@ -1102,5 +1139,80 @@ func TestDecode16BitDQT(t *testing.T) {
 				t.Fatalf("pixel (%d,%d) differs between 16-bit and 8-bit DQT decode", x, y)
 			}
 		}
+	}
+}
+
+// TestDecodeSmallSubsampled decodes chroma planes below three samples.
+func TestDecodeSmallSubsampled(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+		w, h int
+	}{
+		{"tiny", test420tiny, 4, 4},
+		{"strip", test420strip, 64, 3},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := DecodeConfig(bytes.NewReader(tc.data))
+			if err != nil {
+				t.Fatalf("DecodeConfig: %v", err)
+			}
+
+			if cfg.Width != tc.w || cfg.Height != tc.h {
+				t.Errorf("config = %dx%d, want %dx%d", cfg.Width, cfg.Height, tc.w, tc.h)
+			}
+
+			ref, err := jpeg.Decode(bytes.NewReader(tc.data))
+			if err != nil {
+				t.Fatalf("stdlib decode: %v", err)
+			}
+
+			native, err := Decode(bytes.NewReader(tc.data))
+			if err != nil {
+				t.Fatalf("Decode native: %v", err)
+			}
+
+			ycc, ok := native.(*image.YCbCr)
+			if !ok {
+				t.Fatalf("native type = %T, want *image.YCbCr", native)
+			}
+
+			if ycc.SubsampleRatio != image.YCbCrSubsampleRatio420 {
+				t.Errorf("ratio = %v, want 4:2:0", ycc.SubsampleRatio)
+			}
+
+			for _, method := range []UpsampleMethod{NearestNeighbor, CatmullRom} {
+				img, err := Decode(bytes.NewReader(tc.data), &Options{ToRGBA: true, UpsampleMethod: method})
+				if err != nil {
+					t.Fatalf("Decode method %d: %v", method, err)
+				}
+
+				if img.Bounds().Dx() != tc.w || img.Bounds().Dy() != tc.h {
+					t.Fatalf("method %d: bounds = %v, want %dx%d", method, img.Bounds(), tc.w, tc.h)
+				}
+
+				if p := psnr(ref, img); p < 30 {
+					t.Errorf("method %d: psnr %.1f dB against stdlib", method, p)
+				}
+
+				for _, denom := range []int{2, 4, 8} {
+					scaled, err := Decode(bytes.NewReader(tc.data),
+						&Options{ToRGBA: true, UpsampleMethod: method, ScaleDenom: denom})
+					if err != nil {
+						t.Fatalf("method %d denom %d: %v", method, denom, err)
+					}
+
+					wantW := (tc.w + denom - 1) / denom
+					wantH := (tc.h + denom - 1) / denom
+
+					if scaled.Bounds().Dx() != wantW || scaled.Bounds().Dy() != wantH {
+						t.Errorf("method %d denom %d: bounds = %v, want %dx%d",
+							method, denom, scaled.Bounds(), wantW, wantH)
+					}
+				}
+			}
+		})
 	}
 }

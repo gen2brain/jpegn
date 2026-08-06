@@ -944,10 +944,6 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 		// The stride must account for the scaled block size
 		c.stride = c.nBlocksX * outBlockW
 
-		if ((c.width < 3) && (c.ssX != ssxMax)) || ((c.height < 3) && (c.ssY != ssyMax)) {
-			return ErrUnsupported // Smoothing is not supported.
-		}
-
 		if !configOnly {
 			if d.isProgressive {
 				// Progressive: Allocate coefficient buffer based on actual component dimensions
@@ -1156,13 +1152,16 @@ func (d *decoder) convert() error {
 	for i := 0; i < d.ncomp; i++ {
 		c := &d.comp[i]
 
-		if c.width < d.width || c.height < d.height {
-			switch d.upsampleMethod {
-			case CatmullRom:
+		needH := c.width < d.width
+		needV := c.height < d.height
+
+		if needH || needV {
+			cubic := d.upsampleMethod == CatmullRom &&
+				(!needH || c.width >= 3) && (!needV || c.height >= 3)
+
+			if cubic {
 				upsampleCatmullRom(c, d.width, d.height)
-			case NearestNeighbor:
-				fallthrough
-			default:
+			} else {
 				upsampleNearestNeighbor(c, d.width, d.height)
 			}
 		}
