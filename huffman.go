@@ -102,3 +102,145 @@ func buildHuff(t *huffTable, counts *[16]uint8, values []byte) error {
 
 	return nil
 }
+
+// huffEncTable maps a symbol to its canonical code and length.
+type huffEncTable struct {
+	code [256]uint32
+	size [256]uint8
+}
+
+// buildHuffEnc builds an encoding table from DHT counts and values.
+func buildHuffEnc(t *huffEncTable, bits *[17]uint8, values []byte) {
+	*t = huffEncTable{}
+
+	code := uint32(0)
+	k := 0
+
+	for l := 1; l <= 16; l++ {
+		for i := 0; i < int(bits[l]); i++ {
+			if k >= len(values) {
+				return
+			}
+
+			sym := values[k]
+			t.code[sym] = code
+			t.size[sym] = uint8(l)
+
+			code++
+			k++
+		}
+
+		code <<= 1
+	}
+}
+
+// maxCodeLen is the working limit before folding back to 16 bits.
+const maxCodeLen = 32
+
+// genOptimalTable builds a Huffman table from a histogram per JPEG Annex K.2.
+func genOptimalTable(freq *[257]int32, bits *[17]uint8, values *[256]uint8) int {
+	var f [257]int32
+	copy(f[:], freq[:])
+	f[256] = 1
+
+	var others [257]int
+	for i := range others {
+		others[i] = -1
+	}
+
+	var codesize [257]int
+
+	for {
+		v1, v2 := -1, -1
+		var least1, least2 int32
+
+		for i := 0; i <= 256; i++ {
+			if f[i] > 0 && (v1 < 0 || f[i] <= least1) {
+				least1 = f[i]
+				v1 = i
+			}
+		}
+
+		for i := 0; i <= 256; i++ {
+			if f[i] > 0 && i != v1 && (v2 < 0 || f[i] <= least2) {
+				least2 = f[i]
+				v2 = i
+			}
+		}
+
+		if v2 < 0 {
+			break
+		}
+
+		f[v1] += f[v2]
+		f[v2] = 0
+
+		codesize[v1]++
+		for others[v1] >= 0 {
+			v1 = others[v1]
+			codesize[v1]++
+		}
+
+		others[v1] = v2
+
+		codesize[v2]++
+		for others[v2] >= 0 {
+			v2 = others[v2]
+			codesize[v2]++
+		}
+	}
+
+	var count [maxCodeLen + 1]int32
+	for i := 0; i <= 256; i++ {
+		if l := codesize[i]; l > 0 {
+			if l > maxCodeLen {
+				l = maxCodeLen
+				codesize[i] = l
+			}
+
+			count[l]++
+		}
+	}
+
+	for i := maxCodeLen; i > 16; i-- {
+		for count[i] > 0 {
+			j := i - 2
+			for count[j] == 0 {
+				j--
+			}
+
+			count[i] -= 2
+			count[i-1]++
+			count[j+1] += 2
+			count[j]--
+		}
+	}
+
+	i := 16
+	for i > 0 && count[i] == 0 {
+		i--
+	}
+
+	if i == 0 {
+		return 0
+	}
+
+	count[i]--
+
+	*bits = [17]uint8{}
+	for l := 1; l <= 16; l++ {
+		bits[l] = uint8(count[l])
+	}
+
+	p := 0
+	for l := 1; l <= maxCodeLen; l++ {
+		for sym := 0; sym < 256; sym++ {
+			if codesize[sym] == l {
+				values[p] = uint8(sym)
+				p++
+			}
+		}
+	}
+
+	return p
+}

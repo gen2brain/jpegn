@@ -3,6 +3,8 @@ package jpegn
 import (
 	"bytes"
 	"embed"
+	"image"
+	"image/jpeg"
 	"path/filepath"
 	"testing"
 )
@@ -56,5 +58,60 @@ func FuzzDecodeConfig(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _ = DecodeConfig(bytes.NewReader(data))
+	})
+}
+
+// FuzzEncode checks every accepted image produces a decodable stream.
+func FuzzEncode(f *testing.F) {
+	f.Add(uint8(16), uint8(16), uint8(75), uint8(0), false, uint8(0), []byte{1, 2, 3, 4})
+	f.Add(uint8(1), uint8(1), uint8(100), uint8(4), true, uint8(1), []byte{0})
+	f.Add(uint8(37), uint8(9), uint8(1), uint8(3), true, uint8(3), []byte{255, 0, 128})
+
+	f.Fuzz(func(t *testing.T, w, h, quality, sub uint8, optimize bool, rst uint8, pix []byte) {
+		width := int(w)%97 + 1
+		height := int(h)%97 + 1
+
+		src := image.NewRGBA(image.Rect(0, 0, width, height))
+		if len(pix) > 0 {
+			for i := range src.Pix {
+				src.Pix[i] = pix[i%len(pix)]
+			}
+		}
+
+		for i := 3; i < len(src.Pix); i += 4 {
+			src.Pix[i] = 0xFF
+		}
+
+		opts := &EncodeOptions{
+			Quality:         int(quality)%101 + 1,
+			Subsampling:     Subsampling(int(sub) % 6),
+			OptimizeCoding:  optimize,
+			RestartInterval: int(rst),
+		}
+
+		var buf bytes.Buffer
+		if err := Encode(&buf, src, opts); err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+
+		data := buf.Bytes()
+
+		std, err := jpeg.Decode(bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("stdlib decode: %v", err)
+		}
+
+		if std.Bounds().Dx() != width || std.Bounds().Dy() != height {
+			t.Fatalf("stdlib bounds = %v, want %dx%d", std.Bounds(), width, height)
+		}
+
+		got, err := Decode(bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+
+		if got.Bounds() != std.Bounds() {
+			t.Fatalf("bounds = %v, want %v", got.Bounds(), std.Bounds())
+		}
 	})
 }
