@@ -487,6 +487,27 @@ func TestEncodeOptimizeAllSizes(t *testing.T) {
 	}
 }
 
+// TestQuantReciprocal checks the reciprocal matches integer division for every
+// divisor a quantization table can produce and the full coefficient range.
+func TestQuantReciprocal(t *testing.T) {
+	const maxCoef = 1 << 14
+
+	for qval := 1; qval <= 255; qval++ {
+		d := int32(qval) * 8
+		half := d >> 1
+		recip := (1<<quantShift + int64(d) - 1) / int64(d)
+
+		for a := int32(0); a <= maxCoef; a++ {
+			want := (a + half) / d
+			got := int32((int64(a+half) * recip) >> quantShift)
+
+			if got != want {
+				t.Fatalf("qval %d coef %d: got %d, want %d", qval, a, got, want)
+			}
+		}
+	}
+}
+
 // TestEncodeSizeSweep round-trips every size to catch padding and stride bugs.
 func TestEncodeSizeSweep(t *testing.T) {
 	for h := 1; h <= 33; h++ {

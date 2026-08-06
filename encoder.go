@@ -23,6 +23,9 @@ const (
 // DefaultQuality is the quality used when EncodeOptions is nil or Quality is zero.
 const DefaultQuality = 75
 
+// quantShift is the fixed-point scale of the quantization reciprocals.
+const quantShift = 31
+
 // Subsampling selects the chroma subsampling of the encoded image.
 type Subsampling int
 
@@ -100,7 +103,8 @@ type encoder struct {
 	hmax, vmax    int
 	mcusX, mcusY  int
 	qtab          [2][64]uint16 // Zigzag order, as written to DQT.
-	qdiv          [2][64]int32  // Zigzag order, quantization value scaled by 8.
+	qrecip        [2][64]int64  // Zigzag order, reciprocal of the FDCT-matched divisor.
+	qhalf         [2][64]int32  // Zigzag order, half the divisor, for rounding.
 	nqtab         int
 	dcTab         [2]huffEncTable
 	acTab         [2]huffEncTable
@@ -303,8 +307,10 @@ func (e *encoder) buildQuant(quality int) {
 				v = 255
 			}
 
+			d := int32(v) * 8
 			e.qtab[t][i] = uint16(v)
-			e.qdiv[t][i] = int32(v) * 8
+			e.qhalf[t][i] = d >> 1
+			e.qrecip[t][i] = (1<<quantShift + int64(d) - 1) / int64(d)
 		}
 	}
 }
@@ -540,26 +546,21 @@ func (e *encoder) encodeBlock(c *encComponent, sx, sy int) {
 
 	fdct(blk)
 
-	q := &e.qdiv[c.qtSel]
+	recip := &e.qrecip[c.qtSel]
+	half := &e.qhalf[c.qtSel]
 	zb := &e.zblk
 
 	for i := 0; i < 64; i++ {
 		v := blk[zz[i]]
-		d := q[i]
+		sign := v >> 31
+		a := (v ^ sign) - sign
 
-		if v < 0 {
-			v = -((d>>1 - v) / d)
-			if v < -1023 {
-				v = -1023
-			}
-		} else {
-			v = (v + d>>1) / d
-			if v > 1023 {
-				v = 1023
-			}
+		q := int32((int64(a+half[i]) * recip[i]) >> quantShift)
+		if q > 1023 {
+			q = 1023
 		}
 
-		zb[i] = v
+		zb[i] = (q ^ sign) - sign
 	}
 
 	e.encodeCoeffs(zb, c)
