@@ -49,6 +49,12 @@ func FuzzDecode(f *testing.F) {
 
 		// Test decoding to RGBA with Catmull-Rom upsampling.
 		_, _ = Decode(bytes.NewReader(data), optsCR)
+
+		_, _ = DecodeExif(bytes.NewReader(data))
+
+		if raw, err := RawExif(bytes.NewReader(data)); err == nil {
+			_ = setExifOrientation(raw, 1)
+		}
 	})
 }
 

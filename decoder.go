@@ -1664,23 +1664,40 @@ func (d *decoder) convertToCMYK() (image.Image, error) {
 // Individual fields in the returned Exif struct may be zero/empty if those specific
 // tags are not present in the EXIF data.
 func DecodeExif(r io.Reader) (*Exif, error) {
+	seg, err := RawExif(r)
+	if err != nil {
+		return nil, err
+	}
+
+	exif := &Exif{}
+	if err := parseExifData(seg[6:], exif); err != nil {
+		return nil, err
+	}
+
+	return exif, nil
+}
+
+// RawExif returns the EXIF APP1 segment of a JPEG image verbatim, including the
+// leading "Exif\x00\x00" identifier. The result can be passed to [EncodeOptions.Exif]
+// to carry metadata through a decode and re-encode unchanged.
+func RawExif(r io.Reader) ([]byte, error) {
 	br := bufio.NewReader(r)
 
 	var soi [2]byte
 	if _, err := io.ReadFull(br, soi[:]); err != nil {
 		return nil, ErrSyntax
 	}
+
 	if soi[0] != 0xFF || soi[1] != 0xD8 {
 		return nil, ErrSyntax
 	}
-
-	exif := &Exif{}
 
 	for {
 		b, err := br.ReadByte()
 		if err != nil {
 			return nil, ErrNoEXIF
 		}
+
 		if b != 0xFF {
 			return nil, ErrSyntax
 		}
@@ -1689,6 +1706,7 @@ func DecodeExif(r io.Reader) (*Exif, error) {
 		if err != nil {
 			return nil, ErrNoEXIF
 		}
+
 		for marker == 0xFF {
 			if marker, err = br.ReadByte(); err != nil {
 				return nil, ErrNoEXIF
@@ -1699,6 +1717,7 @@ func DecodeExif(r io.Reader) (*Exif, error) {
 		if marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7) {
 			continue
 		}
+
 		// Start of scan or end of image: no metadata beyond here.
 		if marker == 0xDA || marker == 0xD9 {
 			return nil, ErrNoEXIF
@@ -1708,10 +1727,12 @@ func DecodeExif(r io.Reader) (*Exif, error) {
 		if _, err := io.ReadFull(br, lb[:]); err != nil {
 			return nil, ErrNoEXIF
 		}
+
 		length := int(lb[0])<<8 | int(lb[1])
 		if length < 2 {
 			return nil, ErrSyntax
 		}
+
 		length -= 2
 
 		if marker == 0xE1 && length >= 6 {
@@ -1719,12 +1740,11 @@ func DecodeExif(r io.Reader) (*Exif, error) {
 			if _, err := io.ReadFull(br, seg); err != nil {
 				return nil, ErrNoEXIF
 			}
-			if seg[0] == 'E' && seg[1] == 'x' && seg[2] == 'i' && seg[3] == 'f' && seg[4] == 0 && seg[5] == 0 {
-				if err := parseExifData(seg[6:], exif); err != nil {
-					return nil, err
-				}
-				return exif, nil
+
+			if string(seg[:6]) == exifIdent {
+				return seg, nil
 			}
+
 			continue
 		}
 

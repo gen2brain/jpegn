@@ -16,7 +16,9 @@ const (
 	markerDQT  = 0xDB
 	markerDRI  = 0xDD
 	markerSOS  = 0xDA
+	markerAPP1 = 0xE1
 	markerAPP0 = 0xE0
+	markerCOM  = 0xFE
 	markerRST0 = 0xD0
 )
 
@@ -25,6 +27,14 @@ const DefaultQuality = 75
 
 // quantShift is the fixed-point scale of the quantization reciprocals.
 const quantShift = 31
+
+// maxSegmentData is the largest payload a marker segment can carry.
+const maxSegmentData = 65533
+
+// validSegmentMarker reports whether m may be written as a standalone segment.
+func validSegmentMarker(m byte) bool {
+	return (m >= markerAPP0 && m <= markerAPP0+15) || m == markerCOM
+}
 
 // Subsampling selects the chroma subsampling of the encoded image.
 type Subsampling int
@@ -44,6 +54,14 @@ const (
 	SubsampleGray
 )
 
+// Segment is an application or comment marker segment to embed in the output.
+type Segment struct {
+	// Marker is an APPn marker (0xE0 to 0xEF) or the comment marker 0xFE.
+	Marker byte
+	// Data is the segment payload, at most 65533 bytes.
+	Data []byte
+}
+
 // EncodeOptions specifies encoding parameters.
 type EncodeOptions struct {
 	// Quality ranges from 1 (smallest) to 100 (best). Zero selects [DefaultQuality].
@@ -54,6 +72,16 @@ type EncodeOptions struct {
 	OptimizeCoding bool
 	// RestartInterval is the MCU count between restart markers; zero disables them.
 	RestartInterval int
+	// Exif is a raw APP1 payload as returned by [RawExif], written verbatim.
+	// Supplying it replaces the JFIF APP0 segment, which the EXIF specification
+	// does not allow to coexist with APP1.
+	Exif []byte
+	// ResetOrientation rewrites the embedded EXIF orientation tag to 1. Set it
+	// when the pixels have already been rotated, as [Options.AutoRotate] does,
+	// so that viewers do not rotate the image a second time.
+	ResetOrientation bool
+	// Segments are additional marker segments written after the header segment.
+	Segments []Segment
 }
 
 // Quantization tables from the JPEG standard, Annex K.1, in natural order.
@@ -118,6 +146,8 @@ type encoder struct {
 	dcFreq        [2][257]int32
 	acFreq        [2][257]int32
 	rst           int
+	exif          []byte
+	segments      []Segment
 	gather        bool
 	blk           [64]int32
 	zblk          [64]int32
@@ -144,7 +174,27 @@ func Encode(w io.Writer, m image.Image, opts ...*EncodeOptions) error {
 	optimize := false
 	rst := 0
 
+	var exif []byte
+	var segments []Segment
+
 	if len(opts) > 0 && opts[0] != nil {
+		exif = opts[0].Exif
+		segments = opts[0].Segments
+
+		if len(exif) > maxSegmentData {
+			return ErrInvalidSegment
+		}
+
+		if len(exif) > 0 && opts[0].ResetOrientation {
+			exif = setExifOrientation(exif, 1)
+		}
+
+		for _, seg := range segments {
+			if !validSegmentMarker(seg.Marker) || len(seg.Data) > maxSegmentData {
+				return ErrInvalidSegment
+			}
+		}
+
 		if opts[0].Quality != 0 {
 			quality = opts[0].Quality
 		}
@@ -161,8 +211,13 @@ func Encode(w io.Writer, m image.Image, opts ...*EncodeOptions) error {
 
 	defer func() {
 		e.out = e.out[:0]
+		e.exif = nil
+		e.segments = nil
 		encoderPool.Put(e)
 	}()
+
+	e.exif = exif
+	e.segments = segments
 
 	if err := e.encode(m, quality, sub, optimize, rst); err != nil {
 		return err
@@ -391,9 +446,21 @@ func (e *encoder) emitDHT(class, id int, tbits *[17]uint8, values []byte) {
 func (e *encoder) writeHeader() {
 	e.emitMarker(markerSOI)
 
-	e.emitMarker(markerAPP0)
-	e.emitU16(16)
-	e.out = append(e.out, 'J', 'F', 'I', 'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0)
+	if len(e.exif) > 0 {
+		e.emitMarker(markerAPP1)
+		e.emitU16(2 + len(e.exif))
+		e.out = append(e.out, e.exif...)
+	} else {
+		e.emitMarker(markerAPP0)
+		e.emitU16(16)
+		e.out = append(e.out, 'J', 'F', 'I', 'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0)
+	}
+
+	for _, seg := range e.segments {
+		e.emitMarker(seg.Marker)
+		e.emitU16(2 + len(seg.Data))
+		e.out = append(e.out, seg.Data...)
+	}
 
 	for t := 0; t < e.nqtab; t++ {
 		e.emitMarker(markerDQT)

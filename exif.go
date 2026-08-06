@@ -5,17 +5,17 @@ import "fmt"
 // EXIF tag constants
 const (
 	// Main IFD tags
-	tagOrientation      = 0x0112
-	tagImageWidth       = 0x0100
-	tagImageLength      = 0x0101
-	tagMake             = 0x010F
-	tagModel            = 0x0110
-	tagSoftware         = 0x0131
-	tagDateTime         = 0x0132
-	tagArtist           = 0x013B
-	tagCopyright        = 0x8298
-	tagExifIFDPointer   = 0x8769
-	tagGPSIFDPointer    = 0x8825
+	tagOrientation    = 0x0112
+	tagImageWidth     = 0x0100
+	tagImageLength    = 0x0101
+	tagMake           = 0x010F
+	tagModel          = 0x0110
+	tagSoftware       = 0x0131
+	tagDateTime       = 0x0132
+	tagArtist         = 0x013B
+	tagCopyright      = 0x8298
+	tagExifIFDPointer = 0x8769
+	tagGPSIFDPointer  = 0x8825
 
 	// EXIF SubIFD tags
 	tagExposureTime     = 0x829A
@@ -36,18 +36,18 @@ const (
 
 // EXIF data type constants
 const (
-	typeUnsignedByte      = 1
-	typeASCIIString       = 2
-	typeUnsignedShort     = 3
-	typeUnsignedLong      = 4
-	typeUnsignedRational  = 5
-	typeSignedByte        = 6
-	typeUndefined         = 7
-	typeSignedShort       = 8
-	typeSignedLong        = 9
-	typeSignedRational    = 10
-	typeSingleFloat       = 11
-	typeDoubleFloat       = 12
+	typeUnsignedByte     = 1
+	typeASCIIString      = 2
+	typeUnsignedShort    = 3
+	typeUnsignedLong     = 4
+	typeUnsignedRational = 5
+	typeSignedByte       = 6
+	typeUndefined        = 7
+	typeSignedShort      = 8
+	typeSignedLong       = 9
+	typeSignedRational   = 10
+	typeSingleFloat      = 11
+	typeDoubleFloat      = 12
 )
 
 // exifReader wraps the EXIF data with helper functions for reading different data types
@@ -388,4 +388,70 @@ func getDataSize(dataType uint16, count uint32) int {
 		componentSize = 1
 	}
 	return componentSize * int(count)
+}
+
+// exifIdent is the identifier prefixing the TIFF data in an EXIF APP1 segment.
+const exifIdent = "Exif\x00\x00"
+
+// setExifOrientation returns a copy of an APP1 payload with the IFD0
+// orientation tag set to v. The payload is returned unchanged if it holds no
+// orientation tag.
+func setExifOrientation(seg []byte, v uint16) []byte {
+	out := make([]byte, len(seg))
+	copy(out, seg)
+
+	if len(out) < len(exifIdent)+8 || string(out[:len(exifIdent)]) != exifIdent {
+		return out
+	}
+
+	data := out[len(exifIdent):]
+	reader := &exifReader{data: data}
+
+	switch {
+	case data[0] == 0x49 && data[1] == 0x49:
+		reader.littleEndian = true
+	case data[0] == 0x4D && data[1] == 0x4D:
+		reader.littleEndian = false
+	default:
+		return out
+	}
+
+	if reader.uint16(2) != 42 {
+		return out
+	}
+
+	offset := int(reader.uint32(4))
+	if offset < 8 || offset+2 > len(data) {
+		return out
+	}
+
+	count := int(reader.uint16(offset))
+	offset += 2
+
+	for i := 0; i < count; i++ {
+		entry := offset + i*12
+		if entry+12 > len(data) {
+			return out
+		}
+
+		if reader.uint16(entry) != tagOrientation {
+			continue
+		}
+
+		if reader.uint16(entry+2) != 3 || reader.uint32(entry+4) != 1 {
+			return out
+		}
+
+		if reader.littleEndian {
+			data[entry+8] = byte(v)
+			data[entry+9] = byte(v >> 8)
+		} else {
+			data[entry+8] = byte(v >> 8)
+			data[entry+9] = byte(v)
+		}
+
+		return out
+	}
+
+	return out
 }

@@ -3,6 +3,7 @@ package jpegn
 import (
 	"bytes"
 	_ "embed"
+	"image/jpeg"
 	"testing"
 )
 
@@ -133,4 +134,215 @@ func TestDecodeExifInvalidJPEG(t *testing.T) {
 		t.Error("Expected error for invalid JPEG data, got nil")
 	}
 	t.Logf("Got expected error: %v", err)
+}
+
+// TestRawExifRoundTrip carries metadata through a decode and re-encode.
+func TestRawExifRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"canon", testExifCanon},
+		{"gps", testExifGPS},
+		{"orientation", test420o},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := RawExif(bytes.NewReader(tc.data))
+			if err != nil {
+				t.Fatalf("RawExif: %v", err)
+			}
+
+			want, err := DecodeExif(bytes.NewReader(tc.data))
+			if err != nil {
+				t.Fatalf("DecodeExif source: %v", err)
+			}
+
+			src, err := Decode(bytes.NewReader(tc.data))
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+
+			var buf bytes.Buffer
+			if err := Encode(&buf, src, &EncodeOptions{Quality: 90, Exif: raw}); err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+
+			got, err := DecodeExif(bytes.NewReader(buf.Bytes()))
+			if err != nil {
+				t.Fatalf("DecodeExif output: %v", err)
+			}
+
+			if *got != *want {
+				t.Errorf("exif changed:\n got %+v\nwant %+v", *got, *want)
+			}
+
+			if _, err := jpeg.Decode(bytes.NewReader(buf.Bytes())); err != nil {
+				t.Errorf("stdlib decode: %v", err)
+			}
+		})
+	}
+}
+
+// TestEncodeResetOrientation checks the orientation tag is normalized.
+func TestEncodeResetOrientation(t *testing.T) {
+	raw, err := RawExif(bytes.NewReader(test420o))
+	if err != nil {
+		t.Fatalf("RawExif: %v", err)
+	}
+
+	before, err := DecodeExif(bytes.NewReader(test420o))
+	if err != nil {
+		t.Fatalf("DecodeExif: %v", err)
+	}
+
+	if before.Orientation == 1 {
+		t.Fatalf("fixture orientation is already 1, nothing to reset")
+	}
+
+	src, err := Decode(bytes.NewReader(test420o), &Options{ToRGBA: true, AutoRotate: true})
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := Encode(&buf, src, &EncodeOptions{Quality: 90, Exif: raw, ResetOrientation: true}); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	got, err := DecodeExif(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("DecodeExif output: %v", err)
+	}
+
+	if got.Orientation != 1 {
+		t.Errorf("orientation = %d, want 1", got.Orientation)
+	}
+
+	if got.Make != before.Make || got.Model != before.Model {
+		t.Errorf("resetting orientation disturbed other tags")
+	}
+
+	if raw2, _ := RawExif(bytes.NewReader(test420o)); !bytes.Equal(raw, raw2) {
+		t.Error("ResetOrientation mutated the caller's slice")
+	}
+}
+
+// TestEncodeSegments writes extra application and comment segments.
+func TestEncodeSegments(t *testing.T) {
+	src := synthImage(32, 32)
+	comment := []byte("jpegn test comment")
+	icc := append([]byte("ICC_PROFILE\x00\x01\x01"), make([]byte, 64)...)
+
+	var buf bytes.Buffer
+	err := Encode(&buf, src, &EncodeOptions{
+		Quality: 80,
+		Segments: []Segment{
+			{Marker: 0xFE, Data: comment},
+			{Marker: 0xE2, Data: icc},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	out := buf.Bytes()
+	if !bytes.Contains(out, comment) {
+		t.Error("comment segment missing")
+	}
+
+	if !bytes.Contains(out, icc) {
+		t.Error("ICC segment missing")
+	}
+
+	if _, err := jpeg.Decode(bytes.NewReader(out)); err != nil {
+		t.Errorf("stdlib decode: %v", err)
+	}
+
+	if _, err := Decode(bytes.NewReader(out)); err != nil {
+		t.Errorf("Decode: %v", err)
+	}
+}
+
+// TestEncodeSegmentValidation rejects markers and sizes that cannot be written.
+func TestEncodeSegmentValidation(t *testing.T) {
+	src := synthImage(16, 16)
+
+	for _, tc := range []struct {
+		name string
+		opts *EncodeOptions
+	}{
+		{"SOF marker", &EncodeOptions{Segments: []Segment{{Marker: 0xC0, Data: []byte{1}}}}},
+		{"SOS marker", &EncodeOptions{Segments: []Segment{{Marker: 0xDA, Data: []byte{1}}}}},
+		{"oversized", &EncodeOptions{Segments: []Segment{{Marker: 0xE3, Data: make([]byte, 65534)}}}},
+		{"oversized exif", &EncodeOptions{Exif: make([]byte, 65534)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := Encode(&buf, src, tc.opts); err == nil {
+				t.Error("expected an error")
+			}
+		})
+	}
+}
+
+// TestEncodeExifReplacesJFIF checks APP1 precedes the frame and APP0 is dropped.
+func TestEncodeExifReplacesJFIF(t *testing.T) {
+	raw, err := RawExif(bytes.NewReader(testExifCanon))
+	if err != nil {
+		t.Fatalf("RawExif: %v", err)
+	}
+
+	src := synthImage(32, 32)
+
+	var withExif, plain bytes.Buffer
+	if err := Encode(&withExif, src, &EncodeOptions{Quality: 80, Exif: raw}); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	if err := Encode(&plain, src, &EncodeOptions{Quality: 80}); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	if got := withExif.Bytes()[2:4]; got[0] != 0xFF || got[1] != 0xE1 {
+		t.Errorf("first marker = %X, want FFE1", got)
+	}
+
+	if bytes.Contains(withExif.Bytes()[:64], []byte("JFIF")) {
+		t.Error("JFIF APP0 written alongside EXIF APP1")
+	}
+
+	if !bytes.Contains(plain.Bytes()[:32], []byte("JFIF")) {
+		t.Error("JFIF APP0 missing when no EXIF is supplied")
+	}
+}
+
+// TestEncodeMetadataNotPooled checks a pooled encoder does not leak metadata.
+func TestEncodeMetadataNotPooled(t *testing.T) {
+	raw, err := RawExif(bytes.NewReader(testExifCanon))
+	if err != nil {
+		t.Fatalf("RawExif: %v", err)
+	}
+
+	src := synthImage(24, 24)
+
+	var first bytes.Buffer
+	if err := Encode(&first, src, &EncodeOptions{Quality: 80, Exif: raw,
+		Segments: []Segment{{Marker: 0xFE, Data: []byte("secret")}}}); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	for i := 0; i < 8; i++ {
+		var next bytes.Buffer
+		if err := Encode(&next, src, &EncodeOptions{Quality: 80}); err != nil {
+			t.Fatalf("Encode: %v", err)
+		}
+
+		if bytes.Contains(next.Bytes(), []byte("secret")) {
+			t.Fatal("comment leaked into a later encode")
+		}
+
+		if _, err := DecodeExif(bytes.NewReader(next.Bytes())); err == nil {
+			t.Fatal("EXIF leaked into a later encode")
+		}
+	}
 }

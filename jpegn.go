@@ -18,6 +18,7 @@ var (
 	ErrInternal           = errors.New("internal error")
 	ErrSyntax             = errors.New("syntax error")
 	ErrMissingHuffmanCode = errors.New("missing Huffman code")
+	ErrInvalidSegment     = errors.New("invalid marker segment")
 )
 
 // UpsampleMethod defines the algorithm used for chroma upsampling.
