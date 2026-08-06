@@ -3,29 +3,19 @@ package jpegn
 // huffLUTBits is the look-ahead size of the Huffman fast-path table.
 const huffLUTBits = 8
 
-// huffTable is a canonical Huffman decoding table. Codes up to huffLUTBits are
-// resolved with a single direct lookup in lut; longer codes (9..16 bits) use the
-// per-length maxcode/delta arrays. This replaces the 256 KB 16-bit direct table:
-// it builds far cheaper (a 256-entry LUT instead of 65536 entries) and the hot
-// lookup stays in L1.
+// huffTable is a canonical Huffman decoding table.
 type huffTable struct {
-	// lut maps the next huffLUTBits bits to a code: high 8 bits = symbol value,
-	// low 8 bits = code length (1..8). A zero entry means the code is longer than
-	// huffLUTBits (use the maxcode path) or invalid.
+	// lut maps huffLUTBits of look-ahead to symbol<<8|length; zero means a longer code.
 	lut [1 << huffLUTBits]uint16
 
-	// For codes of length l in [9,16]: maxcode[l] is the largest l-bit code of
-	// that length (-1 if none), and the symbol for an l-bit code c is
-	// values[c + delta[l]].
+	// For length l in [9,16]: code c is valid if c <= maxcode[l], symbol values[c+delta[l]].
 	maxcode [17]int32
 	delta   [17]int32
 
 	values [256]uint8
 }
 
-// decodeLong resolves a code longer than huffLUTBits from a 16-bit (MSB-aligned)
-// look-ahead. It returns the code length, the symbol, and whether a valid code
-// was found.
+// decodeLong resolves a code longer than huffLUTBits from MSB-aligned look-ahead.
 func (t *huffTable) decodeLong(look uint32) (int, uint8, bool) {
 	for l := 9; l <= 16; l++ {
 		code := int32(look >> uint(16-l))

@@ -2,9 +2,9 @@
 
 #include "textflag.h"
 
-// AVX2 packed RGB to YCbCr planes, bit-identical to rgbToYCbCr. The green
-// coefficient 38470 and the two 32768 terms exceed VPMADDWD's signed 16-bit
-// range, so green is split as 22086+16384 and the 32768 terms become shifts.
+// AVX2 packed RGB to YCbCr planes, bit-identical to rgbToYCbCr. Green 38470 and
+// the 32768 terms exceed VPMADDWD's signed 16-bit range: green splits as
+// 22086+16384, the 32768 terms become shifts.
 
 // Byte selectors, applied per 128-bit lane to four pixels.
 DATA mrg<>+0(SB)/8, $0x8005800480018000

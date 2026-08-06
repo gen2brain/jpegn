@@ -239,9 +239,7 @@ func (d *decoder) processRestart(nextRst *int, rstCount *int, ah int, nCompScan 
 	for d.size > 0 {
 		b := d.jpegData[d.pos]
 		if b != 0xFF {
-			// Not 0xFF. The RST marker is missing.
-			// Important: Per JPEG standard, RST markers should be present at regular intervals.
-			// If missing, the stream may be corrupted.
+			// The RST marker is missing; the stream may be corrupted.
 
 			// Don't try to continue with corrupted state - terminate the scan
 			d.markerHit = true
@@ -336,9 +334,7 @@ func (d *decoder) processRestart(nextRst *int, rstCount *int, ah int, nCompScan 
 	return false
 }
 
-// resyncToRestart recovers a corrupt baseline scan by scanning forward for the
-// next RSTn marker, skipping any intervening entropy data or fill bytes, and
-// resetting the entropy state. It returns false at EOF or on a non-restart marker.
+// resyncToRestart scans forward to the next RSTn marker and resets entropy state.
 func (d *decoder) resyncToRestart(nextRst *int) bool {
 	// Byte-align and rewind d.pos to the actual consumed position.
 	d.byteAlign()
@@ -434,9 +430,7 @@ func (d *decoder) reset() {
 	*d.acHuff[3] = huffTable{}
 }
 
-// alignAndRewind aligns the bitstream and synchronizes d.pos with the buffer.
-// It ensures that after returning, d.pos points to the start of the next marker segment
-// (or EOF), and the bit buffer is cleared, ready for the next scan or marker processing.
+// alignAndRewind clears the bit buffer and points d.pos at the next marker segment.
 func (d *decoder) alignAndRewind() {
 	// Marker hit during scan (d.markerHit=true).
 	if d.markerHit {
@@ -466,9 +460,7 @@ func (d *decoder) alignAndRewind() {
 			break
 		}
 
-		// If we have data but no marker yet, we must consume the buffer
-		// to allow showBits to read further into the stream (especially if the buffer was full).
-		// We consume data byte by byte (8 bits).
+		// Consume a byte so showBits can read further into the stream.
 
 		bitsToConsume := 8
 		if d.bufBits < 8 {
@@ -710,10 +702,7 @@ func (d *decoder) decodeAPP14() error {
 		d.jpegData[d.pos+3] == 'b' &&
 		d.jpegData[d.pos+4] == 'e' {
 
-		// The colorTransform byte is at offset 11.
-		// 0: Unknown/RGB/CMYK
-		// 1: YCbCr
-		// 2: YCCK
+		// colorTransform at offset 11: 0=RGB/CMYK, 1=YCbCr, 2=YCCK.
 		d.adobeTransformValid = true
 		d.adobeTransform = d.jpegData[d.pos+11]
 
@@ -725,9 +714,7 @@ func (d *decoder) decodeAPP14() error {
 	return d.skip(d.length)
 }
 
-// decodeSOF decodes the Start of Frame segment. It extracts image dimensions,
-// number of components, and component-specific information like subsampling factors.
-// If configOnly is true, it doesn't allocate memory for pixel data.
+// decodeSOF decodes the Start of Frame segment; configOnly skips pixel allocation.
 func (d *decoder) decodeSOF(configOnly bool) error {
 	ssxMax, ssyMax := 0, 0
 	if err := d.decodeLength(); err != nil {
@@ -758,11 +745,7 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 		return ErrUnsupported
 	}
 
-	// Cross-check declared dimensions against the available input: a genuine
-	// image needs entropy data roughly proportional to its pixel count, so a
-	// pixel count far exceeding the file size means a corrupt SOF that would
-	// otherwise trigger a huge buffer allocation. Skipped for config-only decodes,
-	// which intentionally read just a header prefix and never allocate pixels.
+	// Reject a pixel count far exceeding the input size as a corrupt SOF.
 	if !configOnly && int64(d.width)*int64(d.height) > int64(len(d.jpegData))*1024 {
 		return ErrUnsupported
 	}
@@ -826,10 +809,7 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 		ssxMax, ssyMax = 1, 1
 		d.subsampleRatio = image.YCbCrSubsampleRatio444
 	} else if d.ncomp == 4 {
-		// For 4-component images (CMYK or YCbCrK), we only support two
-		// subsampling patterns: [0x11 0x11 0x11 0x11] and [0x22 0x11 0x11 0x22].
-		// Check that C and K channels (comp[0] and comp[3]) have the same subsampling,
-		// and that M and Y channels (comp[1] and comp[2]) both have 1x1.
+		// Four-component images support only [0x11 0x11 0x11 0x11] and [0x22 0x11 0x11 0x22].
 		if d.comp[0].ssX != d.comp[3].ssX || d.comp[0].ssY != d.comp[3].ssY {
 			return ErrUnsupported
 		}
@@ -874,18 +854,14 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 			}
 
 			if d.subsampleRatio == -1 {
-				// Non-standard subsampling ratio (possibly from a corrupted JPEG).
-				// Accept it and use a safe fallback value. We choose 4:4:4 as it's the most general (no subsampling).
-				// Force RGBA conversion since YCbCr's At() won't work correctly with non-standard subsampling.
+				// Non-standard ratio: fall back to 4:4:4 and force RGBA output.
 				d.subsampleRatio = image.YCbCrSubsampleRatio444
 				d.toRGBA = true
 			}
 		}
 	}
 
-	// Calculate MCU dimensions and image dimensions in MCUs.
-	// This MUST be << 3 (shift left by 3 bits = multiply by 8)
-	// Each MCU dimension = max_sampling_factor * 8 pixels
+	// MCU dimensions: max sampling factor times 8 pixels.
 	d.mbSizeX = ssxMax << 3
 	d.mbSizeY = ssyMax << 3
 
@@ -927,10 +903,7 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 			c.height = (d.height*c.ssY + ssyMax - 1) / ssyMax
 		}
 
-		// Calculate nBlocksX/Y based on MCU dimensions.
-		// Both baseline and progressive modes need to allocate enough space for
-		// all blocks that the MCU loop will process, including padding blocks at
-		// image boundaries for non-MCU-aligned dimensions.
+		// Block counts cover the MCU grid, including padding blocks at the edges.
 		c.nBlocksX = d.mbWidth * c.ssX
 		c.nBlocksY = d.mbHeight * c.ssY
 
@@ -1200,9 +1173,7 @@ func (d *decoder) transform() {
 		dstWidth, dstHeight = srcHeight, srcWidth
 	}
 
-	// Allocate a new buffer for the transformed image.
-	// While some transformations (e.g., 180 rotation) can be done in-place,
-	// rotations require a separate buffer if W!=H. For simplicity, we always use a new buffer.
+	// Rotations need a separate buffer when W != H, so always allocate one.
 	dst := make([]byte, dstWidth*dstHeight*4)
 	dstStride := dstWidth * 4
 
@@ -1409,9 +1380,7 @@ markerLoop:
 					break markerLoop
 				}
 
-				// For resilient decoding: if this is baseline mode and we got a syntax error
-				// (likely truncated scan data), accept whatever we decoded and break out.
-				// This handles corrupted JPEGs with missing EOI markers or truncated scan data.
+				// Baseline syntax error: keep what was decoded and stop.
 				if d.isBaseline && errors.Is(err, ErrSyntax) {
 					scansCompleted++
 					break markerLoop
@@ -1563,12 +1532,7 @@ markerLoop:
 	}
 }
 
-// convertToCMYK converts a 4-component JPEG image to image.CMYK.
-// The conversion depends on the Adobe APP14 transform marker:
-//   - transform=0 (CMYK): Interleave C, M, Y, K channels with Adobe inversion
-//   - transform=2 (YCbCrK): Convert YCbCr to RGB, treat as CMY, apply K channel
-//
-// Adobe CMYK images are inverted (255 = no ink, 0 = full ink).
+// convertToCMYK converts a 4-component image per the Adobe APP14 transform.
 func (d *decoder) convertToCMYK() (image.Image, error) {
 	if !d.adobeTransformValid {
 		return nil, ErrUnsupported
@@ -1652,17 +1616,7 @@ func (d *decoder) convertToCMYK() (image.Image, error) {
 	return img, nil
 }
 
-// DecodeExif reads EXIF metadata from a JPEG image without decoding the entire image.
-// It returns an Exif struct containing common EXIF tags like camera make/model,
-// exposure settings, GPS location, and date/time information.
-//
-// Returns an error if:
-//   - The input is not a valid JPEG
-//   - No EXIF data is present in the image
-//   - EXIF data is corrupted or cannot be parsed
-//
-// Individual fields in the returned Exif struct may be zero/empty if those specific
-// tags are not present in the EXIF data.
+// DecodeExif reads EXIF metadata from a JPEG image. Absent tags stay zero.
 func DecodeExif(r io.Reader) (*Exif, error) {
 	seg, err := RawExif(r)
 	if err != nil {
@@ -1677,9 +1631,7 @@ func DecodeExif(r io.Reader) (*Exif, error) {
 	return exif, nil
 }
 
-// RawExif returns the EXIF APP1 segment of a JPEG image verbatim, including the
-// leading "Exif\x00\x00" identifier. The result can be passed to [EncodeOptions.Exif]
-// to carry metadata through a decode and re-encode unchanged.
+// RawExif returns the EXIF APP1 segment verbatim, for [EncodeOptions.Exif].
 func RawExif(r io.Reader) ([]byte, error) {
 	br := bufio.NewReader(r)
 

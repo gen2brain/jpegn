@@ -393,9 +393,7 @@ func getDataSize(dataType uint16, count uint32) int {
 // exifIdent is the identifier prefixing the TIFF data in an EXIF APP1 segment.
 const exifIdent = "Exif\x00\x00"
 
-// setExifOrientation returns a copy of an APP1 payload with the IFD0
-// orientation tag set to v. The payload is returned unchanged if it holds no
-// orientation tag.
+// setExifOrientation returns a copy of an APP1 payload with IFD0 orientation set to v.
 func setExifOrientation(seg []byte, v uint16) []byte {
 	out := make([]byte, len(seg))
 	copy(out, seg)

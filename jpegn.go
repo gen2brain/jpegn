@@ -33,29 +33,17 @@ const (
 
 // Options specifies decoding parameters.
 type Options struct {
-	// ToRGBA forces the output image to be in the RGBA color space.
-	// If false, the image will be returned in its native color space,
-	// which is typically YCbCr for color images or Grayscale for monochrome images.
+	// ToRGBA forces RGBA output instead of the image's native color space.
 	ToRGBA bool
-	// UpsampleMethod defines the algorithm used for chroma upsampling when
-	// converting a subsampled YCbCr image to a full-color format.
-	// This option is only used when the output is RGBA (either because
-	// ToRGBA is true or the source JPEG is in the RGB format).
+	// UpsampleMethod selects the chroma upsampling algorithm, for RGBA output only.
 	UpsampleMethod UpsampleMethod
-	// AutoRotate enables automatic image rotation based on the EXIF orientation tag.
-	// If true, the decoded image will be rotated/flipped to match the intended viewing orientation.
-	// This process forces the output to RGBA if a transformation is applied.
+	// AutoRotate applies the EXIF orientation, forcing RGBA output when it transforms.
 	AutoRotate bool
-	// ScaleDenom specifies the IDCT scaling denominator for efficient downscaling.
-	// Valid values are 1 (no scaling), 2 (1/2 size), 4 (1/4 size), or 8 (1/8 size).
-	// Invalid values will be clamped to the nearest valid value.
-	// This produces higher quality and faster decoding than decoding full size and then downsampling.
+	// ScaleDenom downscales during the IDCT. Valid values are 1, 2, 4 and 8; others are clamped.
 	ScaleDenom int
 }
 
-// Initial buffer size for reading JPEG headers in DecodeConfig.
-// We use a larger buffer to handle images with sizeable APP markers (EXIF, Adobe, etc.).
-// Many images have EXIF data in the 2-16KB range before the SOF marker.
+// initialHeaderSize covers the APP markers that precede SOF in most images.
 const initialHeaderSize = 16384 // 16KB should handle most images
 
 // A pool for header-sized buffers to reduce allocations in DecodeConfig.

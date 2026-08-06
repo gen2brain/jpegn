@@ -72,13 +72,9 @@ type EncodeOptions struct {
 	OptimizeCoding bool
 	// RestartInterval is the MCU count between restart markers; zero disables them.
 	RestartInterval int
-	// Exif is a raw APP1 payload as returned by [RawExif], written verbatim.
-	// Supplying it replaces the JFIF APP0 segment, which the EXIF specification
-	// does not allow to coexist with APP1.
+	// Exif is a raw APP1 payload from [RawExif]; it replaces the JFIF APP0 segment.
 	Exif []byte
-	// ResetOrientation rewrites the embedded EXIF orientation tag to 1. Set it
-	// when the pixels have already been rotated, as [Options.AutoRotate] does,
-	// so that viewers do not rotate the image a second time.
+	// ResetOrientation rewrites the embedded EXIF orientation tag to 1.
 	ResetOrientation bool
 	// Segments are additional marker segments written after the header segment.
 	Segments []Segment
@@ -600,14 +596,22 @@ func (e *encoder) scan() {
 // encodeBlock transforms, quantizes and codes the block at (sx, sy).
 func (e *encoder) encodeBlock(c *encComponent, sx, sy int) {
 	blk := &e.blk
+	off := sy*c.stride + sx
 
-	for y := 0; y < 8; y++ {
-		row := c.plane[(sy+y)*c.stride+sx:]
-		_ = row[7]
+	for y := 0; y < 64; y += 8 {
+		row := c.plane[off : off+8 : off+8]
+		b := blk[y : y+8 : y+8]
 
-		for x := 0; x < 8; x++ {
-			blk[y*8+x] = int32(row[x]) - 128
-		}
+		b[0] = int32(row[0]) - 128
+		b[1] = int32(row[1]) - 128
+		b[2] = int32(row[2]) - 128
+		b[3] = int32(row[3]) - 128
+		b[4] = int32(row[4]) - 128
+		b[5] = int32(row[5]) - 128
+		b[6] = int32(row[6]) - 128
+		b[7] = int32(row[7]) - 128
+
+		off += c.stride
 	}
 
 	fdct(blk)

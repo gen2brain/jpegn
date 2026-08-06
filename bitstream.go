@@ -2,18 +2,13 @@ package jpegn
 
 // Bitstream handling
 
-// showBits reads 'bits' number of bits from the bitstream without consuming them.
-// It ensures the internal buffer `d.buf` has enough data, reading from the main
-// jpegData slice if necessary. It also handles JPEG byte stuffing (0xFF00).
+// showBits peeks the next bits without consuming them, handling byte stuffing.
 func (d *decoder) showBits(bits int) int {
 	if bits == 0 {
 		return 0
 	}
 
-	// Mask d.buf to ensure only valid bits are kept before refilling.
-	// This prevents stale (already consumed) bits from being shifted back into the active stream.
-	// If d.bufBits < 64, we calculate the mask. If d.bufBits == 0, mask is 0, clearing d.buf.
-	// If d.bufBits >= 64 (though typically <= 56 before refill), the entire buffer is valid, no masking needed.
+	// Drop already-consumed bits so they cannot shift back into the stream.
 	if d.bufBits < 64 {
 		mask := (uint64(1) << d.bufBits) - 1
 		d.buf &= mask
@@ -43,9 +38,7 @@ func (d *decoder) showBits(bits int) int {
 						d.pos++
 						d.size--
 					} else {
-						// Marker or Fill bytes (0xFFxx where xx!=0x00, including 0xFFFF).
-						// This indicates the end of the Entropy Coded Segment (ECS).
-						// We must stop the scan and rewind the 0xFF so the marker parser can read it.
+						// End of the entropy-coded segment: rewind the 0xFF for the marker parser.
 
 						// Marker: rewind and do NOT add this 0xFF.
 						// (Covers RSTn, SOS, EOI, and fill bytes 0xFFFF...)
@@ -59,9 +52,7 @@ func (d *decoder) showBits(bits int) int {
 				}
 			}
 
-			// Append data byte to the low bits; older bits move up.
-			// Since d.bufBits <= 56, the shift is safe.
-			// d.buf is already masked above, so the shift operates only on valid bits.
+			// Append the byte to the low bits; older bits move up.
 			d.buf = (d.buf << 8) | uint64(b)
 			d.bufBits += 8 // Update d.bufBits after successful refill.
 		}
@@ -135,9 +126,7 @@ func (d *decoder) getBits(bits int) int {
 		// If we hit a marker (d.markerHit is true, potentially set by showBits), we allow graceful termination.
 		// The caller should detect d.markerHit and stop decoding the scan.
 		if d.markerHit {
-			// We do not consume the bits (skipBits), as the scan is terminating.
-			// The buffer will be realigned later by alignAndRewind.
-			// The returned value 'res' contains the available bits (right-aligned), though it's mostly irrelevant as the scan stops.
+			// The scan is terminating, so leave the bits unconsumed for alignAndRewind.
 			return res
 		}
 
@@ -156,9 +145,7 @@ func (d *decoder) getBits(bits int) int {
 	return res
 }
 
-// getBit reads a single bit from the bitstream. Used for successive approximation.
-// Returns 0 or 1. Treats missing bits (due to marker hit or EOF) as 0.
-// The fast path is kept small so it inlines into the refinement hot loops.
+// getBit reads one bit, returning 0 past a marker or EOF.
 func (d *decoder) getBit() int {
 	if d.bufBits > 0 && !d.markerHit {
 		d.bufBits--

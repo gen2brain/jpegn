@@ -222,10 +222,10 @@ func idct8x8To2x2(blk *[64]int32, out []byte, outOffset int, stride int) {
 	// We compute a simplified transform using only the necessary coefficients
 
 	// Load coefficients (natural order)
-	c00 := blk[0]  // DC
-	c01 := blk[1]  // AC (0,1)
-	c10 := blk[8]  // AC (1,0)
-	c11 := blk[9]  // AC (1,1)
+	c00 := blk[0] // DC
+	c01 := blk[1] // AC (0,1)
+	c10 := blk[8] // AC (1,0)
+	c11 := blk[9] // AC (1,1)
 
 	// Simplified 2D IDCT for 2x2 output
 	// This is a reduced form that evaluates only what's needed for 2x2 output
@@ -238,10 +238,10 @@ func idct8x8To2x2(blk *[64]int32, out []byte, outOffset int, stride int) {
 	r3 := c10 - c11
 
 	// Column transform and output (with level shift)
-	out[outOffset] = clamp(((r0+r2+4)>>3) + 128)
-	out[outOffset+1] = clamp(((r1+r3+4)>>3) + 128)
-	out[outOffset+stride] = clamp(((r0-r2+4)>>3) + 128)
-	out[outOffset+stride+1] = clamp(((r1-r3+4)>>3) + 128)
+	out[outOffset] = clamp(((r0 + r2 + 4) >> 3) + 128)
+	out[outOffset+1] = clamp(((r1 + r3 + 4) >> 3) + 128)
+	out[outOffset+stride] = clamp(((r0 - r2 + 4) >> 3) + 128)
+	out[outOffset+stride+1] = clamp(((r1 - r3 + 4) >> 3) + 128)
 }
 
 // idct8x8To4x4 performs reduced IDCT for 1/2 scaling (produces 4x4 output from 8x8 DCT block)
@@ -283,9 +283,9 @@ func idct8x8To4x4(blk *[64]int32, out []byte, outOffset int, stride int) {
 		t3 := s1 + (s3 >> 1)
 
 		// Output with proper scaling and level shift
-		out[outOffset+0*stride+i] = clamp(((t0+t3)>>3) + 128)
-		out[outOffset+1*stride+i] = clamp(((t1+t2)>>3) + 128)
-		out[outOffset+2*stride+i] = clamp(((t1-t2)>>3) + 128)
-		out[outOffset+3*stride+i] = clamp(((t0-t3)>>3) + 128)
+		out[outOffset+0*stride+i] = clamp(((t0 + t3) >> 3) + 128)
+		out[outOffset+1*stride+i] = clamp(((t1 + t2) >> 3) + 128)
+		out[outOffset+2*stride+i] = clamp(((t1 - t2) >> 3) + 128)
+		out[outOffset+3*stride+i] = clamp(((t0 - t3) >> 3) + 128)
 	}
 }

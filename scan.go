@@ -427,9 +427,7 @@ func (d *decoder) decodeScanBaseline(nCompScan int, scanComp [4]int) error {
 	return nil
 }
 
-// decodeScanBaselineRestart decodes a baseline scan that uses restart intervals.
-// A corrupt interval is recovered by resyncing to the next restart marker rather
-// than aborting the whole image (libjpeg-style error concealment).
+// decodeScanBaselineRestart decodes a baseline scan with restart intervals, resyncing on corruption.
 func (d *decoder) decodeScanBaselineRestart(decodeMCU func(mbx, mby int)) {
 	total := d.mbWidth * d.mbHeight
 	nextRst := 0
@@ -492,9 +490,7 @@ func (d *decoder) decodeScanProgressiveAC(nCompScan int, scanComp [4]int, ss, se
 
 	c := &d.comp[scanComp[0]]
 
-	// Non-interleaved: iterate the true block raster (no MCU padding). blockIndex
-	// is the sequential scan position (for EOB-run clamping); the buffer uses the
-	// nBlocksX stride.
+	// Non-interleaved: iterate the true block raster, addressing with the nBlocksX stride.
 	totalBlocks := c.blocksPerLine * c.blocksPerCol
 
 	blockIndex := 0
@@ -515,9 +511,7 @@ acBlocks:
 			if d.eobRun > 0 {
 				// Apply EOB run - this block gets EOB processing
 				if ah > 0 {
-					// For refinement passes, we MUST refine existing non-zero coefficients
-					// even if scan data is exhausted. getBit() will return 0 when out of data,
-					// which is the correct behavior per JPEG standard.
+					// Refinement continues past exhausted data; getBit returns 0.
 					d.refineBlockEOB(c, coeffOffset, ss, se, al)
 				}
 				// For first pass (ah == 0), coefficients remain zero (already initialized)
@@ -615,9 +609,7 @@ func (d *decoder) decodeBlockACFirst(c *component, offset, ss, se, al, blockInde
 				run = remainingBlocks
 			}
 
-			// The EOB run includes the current block
-			// If run=819 at block 205, it covers blocks 205-1023 (819 blocks)
-			// So we set eobRun to run-1 because the current block is already being processed
+			// The run includes the current block, so store run-1.
 			d.eobRun = run - 1
 
 			return
@@ -730,10 +722,7 @@ loop:
 			continue loop
 		}
 
-		// Process run of zeros and refine existing non-zero coefficients
-		// JPEG Spec: R (nz) counts ZERO coefficients to skip.
-		// After skipping R zeros, place the new coefficient at the next zero position.
-		// We refine non-zero coefficients as we encounter them.
+		// R counts zero coefficients to skip; non-zero ones are refined in passing.
 		nz := val0
 		for zig <= zigEnd {
 			u := zz[zig]
