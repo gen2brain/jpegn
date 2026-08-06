@@ -598,25 +598,8 @@ func (e *encoder) scan() {
 // encodeBlock transforms, quantizes and codes the block at (sx, sy).
 func (e *encoder) encodeBlock(c *encComponent, sx, sy int) {
 	blk := &e.blk
-	off := sy*c.stride + sx
 
-	for y := 0; y < 64; y += 8 {
-		row := c.plane[off : off+8 : off+8]
-		b := blk[y : y+8 : y+8]
-
-		b[0] = int32(row[0]) - 128
-		b[1] = int32(row[1]) - 128
-		b[2] = int32(row[2]) - 128
-		b[3] = int32(row[3]) - 128
-		b[4] = int32(row[4]) - 128
-		b[5] = int32(row[5]) - 128
-		b[6] = int32(row[6]) - 128
-		b[7] = int32(row[7]) - 128
-
-		off += c.stride
-	}
-
-	fdct(blk)
+	fdct(blk, c.plane[sy*c.stride+sx:], c.stride)
 
 	recip := &e.qrecip[c.qtSel]
 	half := &e.qhalf[c.qtSel]

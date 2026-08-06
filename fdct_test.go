@@ -33,6 +33,18 @@ func refDCT(in *[64]int32, out *[64]float64) {
 	}
 }
 
+// plane8 renders a block of level-shifted values as an 8x8 byte plane.
+func plane8(in *[64]int32, stride int) []byte {
+	p := make([]byte, stride*8)
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			p[y*stride+x] = byte(in[y*8+x] + 128)
+		}
+	}
+
+	return p
+}
+
 func TestFDCTAgainstReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 
@@ -61,8 +73,7 @@ func TestFDCTAgainstReference(t *testing.T) {
 				in[i] = tc.gen(i)
 			}
 
-			blk = in
-			fdct(&blk)
+			fdct(&blk, plane8(&in, 8), 8)
 
 			var want [64]float64
 			refDCT(&in, &want)
@@ -86,27 +97,27 @@ func TestFDCTRange(t *testing.T) {
 	var maxDC, maxAC int32
 
 	for n := 0; n < 20000; n++ {
-		var blk [64]int32
-		for i := range blk {
+		var src, blk [64]int32
+		for i := range src {
 			switch n % 3 {
 			case 0:
-				blk[i] = int32(rng.Intn(256)) - 128
+				src[i] = int32(rng.Intn(256)) - 128
 			case 1:
 				if (i/8+i%8)&1 == 0 {
-					blk[i] = 127
+					src[i] = 127
 				} else {
-					blk[i] = -128
+					src[i] = -128
 				}
 			default:
 				if rng.Intn(2) == 0 {
-					blk[i] = 127
+					src[i] = 127
 				} else {
-					blk[i] = -128
+					src[i] = -128
 				}
 			}
 		}
 
-		fdct(&blk)
+		fdct(&blk, plane8(&src, 8), 8)
 
 		for i, v := range blk {
 			if v < 0 {
@@ -160,11 +171,9 @@ func TestFDCTMatchesScalar(t *testing.T) {
 			src[i] = g(i)
 		}
 
-		want := src
-		fdctScalar(&want)
-
-		got := src
-		fdct(&got)
+		var want, got [64]int32
+		fdctScalar(&want, plane8(&src, 11), 11)
+		fdct(&got, plane8(&src, 11), 11)
 
 		if got != want {
 			t.Fatalf("case %d mismatch\n src  %v\n got  %v\n want %v", n, src, got, want)
@@ -172,19 +181,29 @@ func TestFDCTMatchesScalar(t *testing.T) {
 	}
 }
 
-// TestFDCTDoesNotReadPastBlock checks the transform only touches its block.
+// TestFDCTDoesNotReadPastBlock checks the transform stays inside its buffers.
 func TestFDCTDoesNotReadPastBlock(t *testing.T) {
 	var guard [192]int32
 	for i := range guard {
 		guard[i] = 0x5A5A5A5A
 	}
 
-	blk := (*[64]int32)(guard[64:128])
-	for i := range blk {
-		blk[i] = int32(i*5%256) - 128
+	var src [64]int32
+	for i := range src {
+		src[i] = int32(i*5%256) - 128
 	}
 
-	fdct(blk)
+	const stride = 13
+
+	plane := plane8(&src, stride)
+	tail := len(plane) - (7*stride + 8)
+
+	for i := len(plane) - tail; i < len(plane); i++ {
+		plane[i] = 0xC3
+	}
+
+	blk := (*[64]int32)(guard[64:128])
+	fdct(blk, plane, stride)
 
 	for i := 0; i < 64; i++ {
 		if guard[i] != 0x5A5A5A5A {
@@ -200,29 +219,31 @@ func TestFDCTDoesNotReadPastBlock(t *testing.T) {
 }
 
 func BenchmarkFDCT(b *testing.B) {
-	var blk [64]int32
-	for i := range blk {
-		blk[i] = int32(i*3%256) - 128
+	var src, blk [64]int32
+	for i := range src {
+		src[i] = int32(i*3%256) - 128
 	}
+
+	p := plane8(&src, 8)
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		src := blk
-		fdct(&src)
+		fdct(&blk, p, 8)
 	}
 }
 
 func BenchmarkFDCTScalar(b *testing.B) {
-	var blk [64]int32
-	for i := range blk {
-		blk[i] = int32(i*3%256) - 128
+	var src, blk [64]int32
+	for i := range src {
+		src[i] = int32(i*3%256) - 128
 	}
+
+	p := plane8(&src, 8)
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		src := blk
-		fdctScalar(&src)
+		fdctScalar(&blk, p, 8)
 	}
 }

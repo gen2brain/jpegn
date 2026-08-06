@@ -26,8 +26,26 @@ func descale(x int32, n uint) int32 {
 	return (x + 1<<(n-1)) >> n
 }
 
-// fdctScalar transforms level-shifted samples in place, scaled up by 8.
-func fdctScalar(blk *[64]int32) {
+// fdctScalar loads samples, level shifts them and transforms, scaled up by 8.
+func fdctScalar(blk *[64]int32, src []byte, stride int) {
+	off := 0
+
+	for y := 0; y < 64; y += 8 {
+		row := src[off : off+8 : off+8]
+		b := blk[y : y+8 : y+8]
+
+		b[0] = int32(row[0]) - 128
+		b[1] = int32(row[1]) - 128
+		b[2] = int32(row[2]) - 128
+		b[3] = int32(row[3]) - 128
+		b[4] = int32(row[4]) - 128
+		b[5] = int32(row[5]) - 128
+		b[6] = int32(row[6]) - 128
+		b[7] = int32(row[7]) - 128
+
+		off += stride
+	}
+
 	for i := 0; i < 64; i += 8 {
 		b := blk[i : i+8 : i+8]
 		_ = b[7]
