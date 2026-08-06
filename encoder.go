@@ -122,8 +122,7 @@ type encoder struct {
 	blk           [64]int32
 	zblk          [64]int32
 	rowBuf        []byte
-	cbAcc, crAcc  []int32
-	cnt           []uint8
+	chromaBuf     []byte
 }
 
 // encoderPool is a pool of encoder structs to reduce allocation overhead.

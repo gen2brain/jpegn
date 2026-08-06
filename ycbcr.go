@@ -32,39 +32,39 @@ func rgbToY(r, g, b byte) byte {
 	return byte((19595*int32(r) + 38470*int32(g) + 7471*int32(b) + 1<<15) >> 16)
 }
 
-// readRow returns row y of m as RGB samples and the byte stride between pixels.
-func readRow(m image.Image, b image.Rectangle, y int, dst []byte) ([]byte, int) {
+// readRow returns row y of m as RGB samples with a four byte pixel stride.
+func readRow(m image.Image, b image.Rectangle, y int, dst []byte) []byte {
 	w := b.Dx()
 
 	switch src := m.(type) {
 	case *image.RGBA:
-		return src.Pix[src.PixOffset(b.Min.X, b.Min.Y+y):], 4
+		return src.Pix[src.PixOffset(b.Min.X, b.Min.Y+y):]
 	case *image.NRGBA:
 		p := src.Pix[src.PixOffset(b.Min.X, b.Min.Y+y):]
 
-		for x := 0; x < w; x++ {
-			a := uint32(p[x*4+3])
-			dst[x*3] = byte(uint32(p[x*4]) * a / 255)
-			dst[x*3+1] = byte(uint32(p[x*4+1]) * a / 255)
-			dst[x*3+2] = byte(uint32(p[x*4+2]) * a / 255)
+		for x, o := 0, 0; x < w; x, o = x+1, o+4 {
+			a := uint32(p[o+3])
+			dst[o] = byte(uint32(p[o]) * a / 255)
+			dst[o+1] = byte(uint32(p[o+1]) * a / 255)
+			dst[o+2] = byte(uint32(p[o+2]) * a / 255)
 		}
 	case *image.Gray:
 		p := src.Pix[src.PixOffset(b.Min.X, b.Min.Y+y):]
 
-		for x := 0; x < w; x++ {
+		for x, o := 0, 0; x < w; x, o = x+1, o+4 {
 			v := p[x]
-			dst[x*3], dst[x*3+1], dst[x*3+2] = v, v, v
+			dst[o], dst[o+1], dst[o+2] = v, v, v
 		}
 	default:
-		for x := 0; x < w; x++ {
+		for x, o := 0, 0; x < w; x, o = x+1, o+4 {
 			r, g, bl, _ := m.At(b.Min.X+x, b.Min.Y+y).RGBA()
-			dst[x*3] = byte(r >> 8)
-			dst[x*3+1] = byte(g >> 8)
-			dst[x*3+2] = byte(bl >> 8)
+			dst[o] = byte(r >> 8)
+			dst[o+1] = byte(g >> 8)
+			dst[o+2] = byte(bl >> 8)
 		}
 	}
 
-	return dst, 3
+	return dst
 }
 
 // fillRow copies src into dst[:w], replicating the last sample if src is short.
@@ -190,13 +190,13 @@ func (e *encoder) fillGray(m image.Image) {
 		return
 	}
 
-	row := e.scratch(c.width * 3)
+	row := e.scratch(c.width * 4)
 
 	for py := 0; py < c.height; py++ {
-		p, ps := readRow(m, b, py, row)
+		p := readRow(m, b, py, row)
 		q := c.plane[py*c.stride:]
 
-		for px, o := 0, 0; px < c.width; px, o = px+1, o+ps {
+		for px, o := 0, 0; px < c.width; px, o = px+1, o+4 {
 			q[px] = rgbToY(p[o], p[o+1], p[o+2])
 		}
 	}
@@ -206,76 +206,104 @@ func (e *encoder) fillGray(m image.Image) {
 func (e *encoder) fillColor(m image.Image) {
 	b := m.Bounds()
 	w, h := e.width, e.height
-	row := e.scratch(w * 3)
+	row := e.scratch(w * 4)
 
 	y := &e.comp[0]
 	cb := &e.comp[1]
 	cr := &e.comp[2]
 
-	shiftX, shiftY := 0, 0
-	if e.hmax == 2 {
-		shiftX = 1
-	}
-
-	if e.vmax == 2 {
-		shiftY = 1
-	}
-
-	if shiftX == 0 && shiftY == 0 {
+	if e.hmax == 1 && e.vmax == 1 {
 		for py := 0; py < h; py++ {
-			p, ps := readRow(m, b, py, row)
-			yp := y.plane[py*y.stride:]
-			cbp := cb.plane[py*cb.stride:]
-			crp := cr.plane[py*cr.stride:]
-
-			for px, o := 0, 0; px < w; px, o = px+1, o+ps {
-				yp[px], cbp[px], crp[px] = rgbToYCbCr(p[o], p[o+1], p[o+2])
-			}
+			p := readRow(m, b, py, row)
+			rgbToYCbCrRow(y.plane[py*y.stride:], cb.plane[py*cb.stride:], cr.plane[py*cr.stride:], p, w)
 		}
 
 		return
 	}
 
-	cw, ch := cb.width, cb.height
-	n := cw * ch
+	sx, sy := e.hmax, e.vmax
+	span := w * 2
 
-	if cap(e.cbAcc) < n {
-		e.cbAcc = make([]int32, n)
-		e.crAcc = make([]int32, n)
-		e.cnt = make([]uint8, n)
+	if cap(e.chromaBuf) < span*sy {
+		e.chromaBuf = make([]byte, span*sy)
 	}
 
-	cbAcc, crAcc, cnt := e.cbAcc[:n], e.crAcc[:n], e.cnt[:n]
-	clear(cbAcc)
-	clear(crAcc)
-	clear(cnt)
+	buf := e.chromaBuf[:span*sy]
 
-	for py := 0; py < h; py++ {
-		p, ps := readRow(m, b, py, row)
-		yp := y.plane[py*y.stride:]
-		co := (py >> shiftY) * cw
+	for cy := 0; cy < cb.height; cy++ {
+		rows := 0
 
-		for px, o := 0, 0; px < w; px, o = px+1, o+ps {
-			yv, cbv, crv := rgbToYCbCr(p[o], p[o+1], p[o+2])
-			yp[px] = yv
+		for k := 0; k < sy; k++ {
+			py := cy*sy + k
+			if py >= h {
+				break
+			}
 
-			i := co + px>>shiftX
-			cbAcc[i] += int32(cbv)
-			crAcc[i] += int32(crv)
-			cnt[i]++
+			p := readRow(m, b, py, row)
+			rgbToYCbCrRow(y.plane[py*y.stride:], buf[k*span:], buf[k*span+w:], p, w)
+			rows++
 		}
+
+		downsampleChroma(cb.plane[cy*cb.stride:], cr.plane[cy*cr.stride:], buf, w, cb.width, sx, rows)
+	}
+}
+
+// downsampleChroma box-filters sx by rows sample groups into one chroma row.
+func downsampleChroma(dstCb, dstCr, buf []byte, w, cw, sx, rows int) {
+	span := w * 2
+	cb0, cr0 := buf[0:w], buf[w:span]
+	cb1, cr1 := cb0, cr0
+
+	if rows > 1 {
+		cb1, cr1 = buf[span:span+w], buf[span+w:span*2]
 	}
 
-	for cy := 0; cy < ch; cy++ {
-		cbp := cb.plane[cy*cb.stride:]
-		crp := cr.plane[cy*cr.stride:]
-		i := cy * cw
+	full := cw
+	if full*sx > w {
+		full--
+	}
 
-		for cx := 0; cx < cw; cx++ {
-			k := int32(cnt[i+cx])
-			cbp[cx] = byte((cbAcc[i+cx] + k>>1) / k)
-			crp[cx] = byte((crAcc[i+cx] + k>>1) / k)
+	switch {
+	case sx == 2 && rows == 2:
+		for cx := 0; cx < full; cx++ {
+			x := cx * 2
+			dstCb[cx] = byte((int32(cb0[x]) + int32(cb0[x+1]) + int32(cb1[x]) + int32(cb1[x+1]) + 2) >> 2)
+			dstCr[cx] = byte((int32(cr0[x]) + int32(cr0[x+1]) + int32(cr1[x]) + int32(cr1[x+1]) + 2) >> 2)
 		}
+	case sx == 2:
+		for cx := 0; cx < full; cx++ {
+			x := cx * 2
+			dstCb[cx] = byte((int32(cb0[x]) + int32(cb0[x+1]) + 1) >> 1)
+			dstCr[cx] = byte((int32(cr0[x]) + int32(cr0[x+1]) + 1) >> 1)
+		}
+	case rows == 2:
+		for cx := 0; cx < full; cx++ {
+			dstCb[cx] = byte((int32(cb0[cx]) + int32(cb1[cx]) + 1) >> 1)
+			dstCr[cx] = byte((int32(cr0[cx]) + int32(cr1[cx]) + 1) >> 1)
+		}
+	default:
+		copy(dstCb[:full], cb0[:full])
+		copy(dstCr[:full], cr0[:full])
+	}
+
+	for cx := full; cx < cw; cx++ {
+		var sb, sr, cnt int32
+
+		for k := 0; k < rows; k++ {
+			cbRow, crRow := cb0, cr0
+			if k == 1 {
+				cbRow, crRow = cb1, cr1
+			}
+
+			for dx, x := 0, cx*sx; dx < sx && x < w; dx, x = dx+1, x+1 {
+				sb += int32(cbRow[x])
+				sr += int32(crRow[x])
+				cnt++
+			}
+		}
+
+		dstCb[cx] = byte((sb + cnt>>1) / cnt)
+		dstCr[cx] = byte((sr + cnt>>1) / cnt)
 	}
 }
 
