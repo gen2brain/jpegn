@@ -132,6 +132,73 @@ func TestFDCTRange(t *testing.T) {
 	}
 }
 
+// TestFDCTMatchesScalar checks the assembly path is bit-identical to pure Go.
+func TestFDCTMatchesScalar(t *testing.T) {
+	rng := rand.New(rand.NewSource(3))
+
+	gen := []func(i int) int32{
+		func(int) int32 { return 0 },
+		func(int) int32 { return 127 },
+		func(int) int32 { return -128 },
+		func(i int) int32 { return int32(i%8*32) - 128 },
+		func(i int) int32 { return int32(i/8*32) - 128 },
+		func(i int) int32 {
+			if (i/8+i%8)&1 == 0 {
+				return 127
+			}
+
+			return -128
+		},
+		func(int) int32 { return int32(rng.Intn(256)) - 128 },
+	}
+
+	for n := 0; n < 100000; n++ {
+		var src [64]int32
+		g := gen[n%len(gen)]
+
+		for i := range src {
+			src[i] = g(i)
+		}
+
+		want := src
+		fdctScalar(&want)
+
+		got := src
+		fdct(&got)
+
+		if got != want {
+			t.Fatalf("case %d mismatch\n src  %v\n got  %v\n want %v", n, src, got, want)
+		}
+	}
+}
+
+// TestFDCTDoesNotReadPastBlock checks the transform only touches its block.
+func TestFDCTDoesNotReadPastBlock(t *testing.T) {
+	var guard [192]int32
+	for i := range guard {
+		guard[i] = 0x5A5A5A5A
+	}
+
+	blk := (*[64]int32)(guard[64:128])
+	for i := range blk {
+		blk[i] = int32(i*5%256) - 128
+	}
+
+	fdct(blk)
+
+	for i := 0; i < 64; i++ {
+		if guard[i] != 0x5A5A5A5A {
+			t.Fatalf("wrote before block at %d: %d", i, guard[i])
+		}
+	}
+
+	for i := 128; i < 192; i++ {
+		if guard[i] != 0x5A5A5A5A {
+			t.Fatalf("wrote past block at %d: %d", i, guard[i])
+		}
+	}
+}
+
 func BenchmarkFDCT(b *testing.B) {
 	var blk [64]int32
 	for i := range blk {
@@ -143,5 +210,19 @@ func BenchmarkFDCT(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		src := blk
 		fdct(&src)
+	}
+}
+
+func BenchmarkFDCTScalar(b *testing.B) {
+	var blk [64]int32
+	for i := range blk {
+		blk[i] = int32(i*3%256) - 128
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		src := blk
+		fdctScalar(&src)
 	}
 }
