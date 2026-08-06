@@ -127,8 +127,8 @@ type encoder struct {
 	hmax, vmax    int
 	mcusX, mcusY  int
 	qtab          [2][64]uint16 // Zigzag order, as written to DQT.
-	qrecip        [2][64]int64  // Zigzag order, reciprocal of the FDCT-matched divisor.
-	qhalf         [2][64]int32  // Zigzag order, half the divisor, for rounding.
+	qrecip        [2][64]int32  // Natural order, reciprocal of the FDCT-matched divisor.
+	qhalf         [2][64]int32  // Natural order, half the divisor, for rounding.
 	nqtab         int
 	dcTab         [2]huffEncTable
 	acTab         [2]huffEncTable
@@ -348,7 +348,9 @@ func (e *encoder) buildQuant(quality int) {
 		}
 
 		for i := 0; i < 64; i++ {
-			v := (int(base[zz[i]])*scale + 50) / 100
+			nat := zz[i]
+
+			v := (int(base[nat])*scale + 50) / 100
 			if v < 1 {
 				v = 1
 			}
@@ -359,8 +361,8 @@ func (e *encoder) buildQuant(quality int) {
 
 			d := int32(v) * 8
 			e.qtab[t][i] = uint16(v)
-			e.qhalf[t][i] = d >> 1
-			e.qrecip[t][i] = (1<<quantShift + int64(d) - 1) / int64(d)
+			e.qhalf[t][nat] = d >> 1
+			e.qrecip[t][nat] = int32((1<<quantShift + int64(d) - 1) / int64(d))
 		}
 	}
 }
@@ -620,18 +622,7 @@ func (e *encoder) encodeBlock(c *encComponent, sx, sy int) {
 	half := &e.qhalf[c.qtSel]
 	zb := &e.zblk
 
-	for i := 0; i < 64; i++ {
-		v := blk[zz[i]]
-		sign := v >> 31
-		a := (v ^ sign) - sign
-
-		q := int32((int64(a+half[i]) * recip[i]) >> quantShift)
-		if q > 1023 {
-			q = 1023
-		}
-
-		zb[i] = (q ^ sign) - sign
-	}
+	quantizeBlock(zb, blk, recip, half)
 
 	e.encodeCoeffs(zb, c)
 }
@@ -659,7 +650,7 @@ func (e *encoder) encodeCoeffs(zb *[64]int32, c *encComponent) {
 	run := 0
 
 	for k := 1; k < 64; k++ {
-		v := zb[k]
+		v := zb[zz[k]]
 		if v == 0 {
 			run++
 
