@@ -119,7 +119,7 @@ type encComponent struct {
 // encoder holds the state of the JPEG encoding process.
 type encoder struct {
 	out           []byte
-	acc           uint32
+	acc           uint64
 	nacc          uint
 	width, height int
 	ncomp         int
@@ -507,25 +507,60 @@ func (e *encoder) writeHeader() {
 
 // emitBits appends nbits of code, applying JPEG byte stuffing.
 func (e *encoder) emitBits(code uint32, nbits uint8) {
-	e.acc = e.acc<<nbits | code
+	e.acc = e.acc<<nbits | uint64(code)
 	e.nacc += uint(nbits)
 
-	for e.nacc >= 8 {
-		b := byte(e.acc >> (e.nacc - 8))
+	if e.nacc < 32 {
+		return
+	}
+
+	e.nacc -= 32
+	v := uint32(e.acc >> e.nacc)
+
+	// A set bit marks a 0xFF byte, which needs a stuffed zero after it.
+	if (^v-0x01010101)&v&0x80808080 != 0 {
+		e.stuff(v)
+
+		return
+	}
+
+	e.out = append(e.out, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
+}
+
+// stuff writes four bytes that contain at least one 0xFF.
+func (e *encoder) stuff(v uint32) {
+	for s := 24; s >= 0; s -= 8 {
+		b := byte(v >> uint(s))
 		e.out = append(e.out, b)
 
 		if b == 0xFF {
 			e.out = append(e.out, 0x00)
 		}
-
-		e.nacc -= 8
 	}
 }
 
 // flushBits pads to a byte boundary with one bits.
 func (e *encoder) flushBits() {
+	for e.nacc >= 8 {
+		e.nacc -= 8
+
+		b := byte(e.acc >> e.nacc)
+		e.out = append(e.out, b)
+
+		if b == 0xFF {
+			e.out = append(e.out, 0x00)
+		}
+	}
+
 	if e.nacc > 0 {
-		e.emitBits((1<<(8-e.nacc))-1, uint8(8-e.nacc))
+		pad := 8 - e.nacc
+
+		b := byte(e.acc<<pad) | byte(1<<pad-1)
+		e.out = append(e.out, b)
+
+		if b == 0xFF {
+			e.out = append(e.out, 0x00)
+		}
 	}
 
 	e.acc = 0

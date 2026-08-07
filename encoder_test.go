@@ -7,6 +7,7 @@ import (
 	"image/draw"
 	"image/jpeg"
 	"math"
+	"math/rand"
 	"sync"
 	"testing"
 )
@@ -719,6 +720,97 @@ func TestEncodeSizeTable(t *testing.T) {
 
 		if opt > mine {
 			t.Errorf("q%d: optimized %d larger than plain %d", q, opt, mine)
+		}
+	}
+}
+
+// TestEmitBitsStuffing checks the bulk byte-stuffing fast path against a
+// reference scan of the entropy-coded segment.
+func TestEmitBitsStuffing(t *testing.T) {
+	for i := 0; i < 32; i++ {
+		if v := uint32(i) * 0x01010101; ((^v-0x01010101)&v&0x80808080 != 0) != false {
+			t.Fatalf("false positive for %08x", v)
+		}
+	}
+
+	for _, pos := range []uint{0, 8, 16, 24} {
+		v := uint32(0xFF) << pos
+		if (^v-0x01010101)&v&0x80808080 == 0 {
+			t.Fatalf("missed 0xFF at bit %d (%08x)", pos, v)
+		}
+	}
+
+	rng := rand.New(rand.NewSource(31))
+
+	for n := 0; n < 4000; n++ {
+		v := rng.Uint32()
+
+		want := false
+		for s := 0; s < 32; s += 8 {
+			if byte(v>>uint(s)) == 0xFF {
+				want = true
+			}
+		}
+
+		if got := (^v-0x01010101)&v&0x80808080 != 0; got != want {
+			t.Fatalf("%08x: got %v, want %v", v, got, want)
+		}
+	}
+}
+
+// TestEncodeScanIsStuffed checks every 0xFF inside the entropy-coded segment is
+// followed by a stuffed zero or is a restart marker.
+func TestEncodeScanIsStuffed(t *testing.T) {
+	srcs := []image.Image{synthImage(97, 61), photoRGBA(t)}
+
+	solid := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	for i := range solid.Pix {
+		solid.Pix[i] = 0xFF
+	}
+
+	srcs = append(srcs, solid)
+
+	for si, src := range srcs {
+		for _, q := range []int{1, 25, 75, 95, 100} {
+			for _, ri := range []int{0, 3} {
+				for _, opt := range []bool{false, true} {
+					data := encodeToBytes(t, src, &EncodeOptions{
+						Quality: q, Subsampling: Subsample420,
+						OptimizeCoding: opt, RestartInterval: ri,
+					})
+
+					sos := bytes.Index(data, []byte{0xFF, 0xDA})
+					if sos < 0 {
+						t.Fatalf("no SOS marker")
+					}
+
+					start := sos + 2 + int(data[sos+2])<<8 + int(data[sos+3])
+
+					for i := start; i < len(data)-2; i++ {
+						if data[i] != 0xFF {
+							continue
+						}
+
+						n := data[i+1]
+						if n == 0x00 || (n >= 0xD0 && n <= 0xD7) {
+							i++
+
+							continue
+						}
+
+						if n == 0xD9 && i == len(data)-2 {
+							break
+						}
+
+						t.Fatalf("src %d q%d ri%d opt=%v: unstuffed FF %02X at %d of %d",
+							si, q, ri, opt, n, i, len(data))
+					}
+
+					if _, err := jpeg.Decode(bytes.NewReader(data)); err != nil {
+						t.Fatalf("src %d q%d ri%d opt=%v: stdlib decode: %v", si, q, ri, opt, err)
+					}
+				}
+			}
 		}
 	}
 }
