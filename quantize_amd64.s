@@ -16,15 +16,18 @@ DATA qmax<>+24(SB)/4, $1023
 DATA qmax<>+28(SB)/4, $1023
 GLOBL qmax<>(SB), RODATA|NOPTR, $32
 
-// func quantizeAVX2(dst, src, recip, half *[64]int32)
-TEXT ·quantizeAVX2(SB), NOSPLIT, $0-32
+// func quantizeAVX2(dst, src, recip, half *[64]int32) uint64
+TEXT ·quantizeAVX2(SB), NOSPLIT, $0-40
 	MOVQ dst+0(FP), DI
 	MOVQ src+8(FP), SI
 	MOVQ recip+16(FP), DX
 	MOVQ half+24(FP), BX
 
 	VMOVDQU qmax<>(SB), Y7
-	MOVQ    $8, CX
+	VPXOR   Y8, Y8, Y8
+	XORQ    R8, R8
+	XORQ    R9, R9
+	MOVQ    $8, R11
 
 loop:
 	VMOVDQU (SI), Y0
@@ -50,12 +53,25 @@ loop:
 
 	VMOVDQU Y4, (DI)
 
+	// Record which lanes are non-zero.
+	VPCMPEQD  Y8, Y4, Y9
+	VMOVMSKPS Y9, AX
+	NOTL      AX
+	ANDL      $0xFF, AX
+	MOVQ      AX, R10
+	MOVQ      R9, CX
+	SHLQ      CL, R10
+	ORQ       R10, R8
+	ADDQ      $8, R9
+
 	ADDQ $32, SI
 	ADDQ $32, DX
 	ADDQ $32, BX
 	ADDQ $32, DI
-	DECQ CX
+	DECQ R11
 	JNZ  loop
+
+	MOVQ R8, ret+32(FP)
 
 	VZEROUPPER
 	RET

@@ -25,6 +25,15 @@ const (
 // DefaultQuality is the quality used when EncodeOptions is nil or Quality is zero.
 const DefaultQuality = 75
 
+// invZz maps a natural coefficient index to its zigzag position.
+var invZz [64]uint8
+
+func init() {
+	for k, n := range zz {
+		invZz[n] = uint8(k)
+	}
+}
+
 // quantShift is the fixed-point scale of the quantization reciprocals.
 const quantShift = 31
 
@@ -640,13 +649,12 @@ func (e *encoder) encodeBlock(c *encComponent, sx, sy int) {
 	half := &e.qhalf[c.qtSel]
 	zb := &e.zblk
 
-	quantizeBlock(zb, blk, recip, half)
-
-	e.encodeCoeffs(zb, c)
+	e.encodeCoeffs(zb, c, quantizeBlock(zb, blk, recip, half))
 }
 
-// encodeCoeffs codes one block of quantized coefficients in zigzag order.
-func (e *encoder) encodeCoeffs(zb *[64]int32, c *encComponent) {
+// encodeCoeffs codes one block of quantized coefficients. nz marks the non-zero
+// natural positions; it is permuted to zigzag order so only those are visited.
+func (e *encoder) encodeCoeffs(zb *[64]int32, c *encComponent, nz uint64) {
 	diff := zb[0] - c.pred
 	c.pred = zb[0]
 
@@ -665,16 +673,20 @@ func (e *encoder) encodeCoeffs(zb *[64]int32, c *encComponent) {
 
 	af := &e.acFreq[c.acSel]
 	t := &e.acTab[c.acSel]
-	run := 0
 
-	for k := 1; k < 64; k++ {
-		v := zb[zz[k]]
-		if v == 0 {
-			run++
+	zm := uint64(0)
 
-			continue
-		}
+	for m := nz &^ 1; m != 0; m &= m - 1 {
+		zm |= 1 << invZz[bits.TrailingZeros64(m)]
+	}
 
+	prev := 0
+
+	for zm != 0 {
+		k := bits.TrailingZeros64(zm)
+		zm &= zm - 1
+
+		run := k - prev - 1
 		for run > 15 {
 			if e.gather {
 				af[0xF0]++
@@ -685,7 +697,7 @@ func (e *encoder) encodeCoeffs(zb *[64]int32, c *encComponent) {
 			run -= 16
 		}
 
-		s, b := magnitude(v)
+		s, b := magnitude(zb[zz[k]])
 		sym := run<<4 | int(s)
 
 		if e.gather {
@@ -695,10 +707,10 @@ func (e *encoder) encodeCoeffs(zb *[64]int32, c *encComponent) {
 			e.emitBits(b, s)
 		}
 
-		run = 0
+		prev = k
 	}
 
-	if run > 0 {
+	if prev < 63 {
 		if e.gather {
 			af[0]++
 		} else {
