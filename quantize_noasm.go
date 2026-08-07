@@ -17,10 +17,7 @@ func quantizeBlockScalar(dst, src *[64]int32, recip, half *[64]int32) uint64 {
 
 		v = (q ^ sign) - sign
 		dst[i] = v
-
-		if v != 0 {
-			nz |= 1 << uint(i)
-		}
+		nz |= uint64(uint32((v|-v)>>31)&1) << uint(i)
 	}
 
 	return nz

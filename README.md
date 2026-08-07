@@ -43,62 +43,62 @@ err := jpegn.Encode(w, img, &jpegn.EncodeOptions{
 
 Decoding, compared to the standard library:
 ```
-BenchmarkDecodeBaseline420-8             	    3124	    742291 ns/op	  426321 B/op	       6 allocs/op
-BenchmarkDecodeBaseline420StdLib-8       	    1318	   1819781 ns/op	  407089 B/op	       5 allocs/op
+BenchmarkDecodeBaseline420-8             	    3058	    791961 ns/op	  426324 B/op	       6 allocs/op
+BenchmarkDecodeBaseline420StdLib-8       	    1106	   2047137 ns/op	  407090 B/op	       5 allocs/op
 
-BenchmarkDecodeProgressive420-8          	    1156	   2128195 ns/op	 1999883 B/op	      10 allocs/op
-BenchmarkDecodeProgressive420StdLib-8    	     662	   3602531 ns/op	 1980106 B/op	      17 allocs/op
+BenchmarkDecodeProgressive420-8          	     991	   2303827 ns/op	 1999880 B/op	      10 allocs/op
+BenchmarkDecodeProgressive420StdLib-8    	     603	   4017204 ns/op	 1980104 B/op	      17 allocs/op
 
-BenchmarkDecodeConfig-8                  	 5923922	       410.4 ns/op	      48 B/op	       1 allocs/op
-BenchmarkDecodeConfigStdLib-8            	 1473702	      1474 ns/op	   13616 B/op	       2 allocs/op
+BenchmarkDecodeConfig-8                  	 4975368	       474.3 ns/op	      48 B/op	       1 allocs/op
+BenchmarkDecodeConfigStdLib-8            	 1219048	      2059 ns/op	   13616 B/op	       2 allocs/op
 
-BenchmarkDecodeToRGBANearestNeighbor-8   	    2053	   1157808 ns/op	 2000039 B/op	      10 allocs/op
-BenchmarkDecodeToRGBACatmullRom-8        	    1915	   1263899 ns/op	 2262274 B/op	      13 allocs/op
-BenchmarkDecodeToRGBAStdLib-8            	     849	   2839869 ns/op	 1455735 B/op	       7 allocs/op
+BenchmarkDecodeToRGBANearestNeighbor-8   	    1822	   1317247 ns/op	 2000039 B/op	      10 allocs/op
+BenchmarkDecodeToRGBACatmullRom-8        	    1633	   1423599 ns/op	 2262183 B/op	      12 allocs/op
+BenchmarkDecodeToRGBAStdLib-8            	     740	   3219690 ns/op	 1455735 B/op	       7 allocs/op
 ```
 
 Encoding, compared to the standard library:
 ```
-BenchmarkEncodeRGBA420-8           	    1251	   1922799 ns/op	 136.33 MB/s	   33285 B/op	       2 allocs/op
-BenchmarkEncodeRGBA420Stdlib-8     	     403	   6046358 ns/op	  43.36 MB/s	   66032 B/op	      12 allocs/op
+BenchmarkEncodeRGBA420-8                 	    1651	   1407864 ns/op	 186.20 MB/s	   32834 B/op	       2 allocs/op
+BenchmarkEncodeRGBA420Stdlib-8           	     456	   5381613 ns/op	  48.71 MB/s	   66032 B/op	      12 allocs/op
 
-BenchmarkEncodeYCbCr420-8          	    1630	   1536924 ns/op	 170.56 MB/s	   33173 B/op	       2 allocs/op
-BenchmarkEncodeYCbCr420Stdlib-8    	     421	   5650503 ns/op	  46.39 MB/s	   66032 B/op	      12 allocs/op
+BenchmarkEncodeYCbCr420-8                	    2404	    998885 ns/op	 262.44 MB/s	   33062 B/op	       2 allocs/op
+BenchmarkEncodeYCbCr420Stdlib-8          	     517	   4809590 ns/op	  54.50 MB/s	   66032 B/op	      12 allocs/op
 
-BenchmarkEncodeGray-8              	    1741	   1364447 ns/op	 192.12 MB/s	   33074 B/op	       2 allocs/op
-BenchmarkEncodeGrayStdlib-8        	     655	   3512462 ns/op	  74.63 MB/s	   65936 B/op	      10 allocs/op
+BenchmarkEncodeGray-8                    	    2581	    931858 ns/op	 281.31 MB/s	   33160 B/op	       2 allocs/op
+BenchmarkEncodeGrayStdlib-8              	     750	   3108625 ns/op	  84.33 MB/s	   65936 B/op	      10 allocs/op
 ```
 
 The standard library always writes 4:2:0 with the standard Huffman tables, so these have no
 counterpart:
 ```
-BenchmarkEncodeRGBA444-8           	     986	   2458430 ns/op	 106.63 MB/s	   41999 B/op	       2 allocs/op
-BenchmarkEncodeRGBA422-8           	    1051	   2284407 ns/op	 114.75 MB/s	   42352 B/op	       2 allocs/op
-BenchmarkEncodeRGBA420Optimize-8   	     771	   3113893 ns/op	  84.19 MB/s	   33567 B/op	       2 allocs/op
+BenchmarkEncodeRGBA444-8                 	    1480	   1624043 ns/op	 161.41 MB/s	   41675 B/op	       2 allocs/op
+BenchmarkEncodeRGBA422-8                 	    1438	   1658117 ns/op	 158.10 MB/s	   41514 B/op	       2 allocs/op
+BenchmarkEncodeRGBA420Optimize-8         	    1134	   2226588 ns/op	 117.73 MB/s	   33331 B/op	       2 allocs/op
 ```
 
-File size is within 0.2% of the standard library at the same quality and subsampling.
-`OptimizeCoding` reduces it by 4% at quality 50, rising to 20% at quality 95.
+File size is within 0.2% of the standard library at the same quality and subsampling, and identical
+to libjpeg-turbo at quality 50. `OptimizeCoding` reduces it by 4% at quality 50, rising to 20% at
+quality 95.
 
 Difference with assembly optimizations (noasm vs asm):
 ```
 benchmark                                  old ns/op     new ns/op     delta
-BenchmarkDecodeBaseline420-8               1584411       742291        -53.15%
-BenchmarkDecodeProgressive420-8            2882890       2128195       -26.18%
-BenchmarkDecodeConfig-8                    453.7         410.4         -9.54%
-BenchmarkDecodeToRGBANearestNeighbor-8     2942280       1157808       -60.65%
-BenchmarkDecodeToRGBACatmullRom-8          4016591       1263899       -68.53%
-BenchmarkIdct-8                            144.1         36.68         -74.55%
-BenchmarkUpsampleNearestNeighbor-8         359914        116759        -67.56%
-BenchmarkUpsampleCatmullRom-8              2703968       319568        -88.18%
+BenchmarkDecodeBaseline420-8               1703998       898566        -47.27%
+BenchmarkDecodeProgressive420-8            2970034       2335332       -21.37%
+BenchmarkDecodeToRGBANearestNeighbor-8     2969821       1277749       -56.98%
+BenchmarkDecodeToRGBACatmullRom-8          4189137       1423913       -66.01%
+BenchmarkIdct-8                            161.3         42.81         -73.46%
+BenchmarkUpsampleNearestNeighbor-8         352034        142694        -59.47%
+BenchmarkUpsampleCatmullRom-8              2957886       397606        -86.56%
 
-BenchmarkEncodeRGBA420-8                   3821227       1783265       -53.33%
-BenchmarkEncodeRGBA444-8                   5646200       2326511       -58.80%
-BenchmarkEncodeYCbCr420-8                  2352321       1359983       -42.19%
-BenchmarkEncodeGray-8                      1853314       1216213       -34.38%
-BenchmarkFDCT-8                            114.1         24.9          -78.16%
-BenchmarkRGBToYCbCrRow-8                   4994          404           -91.91%
-BenchmarkQuantizeBlock-8                   22.3          16.9          -24.32%
+BenchmarkEncodeRGBA420-8                   3987337       1542867       -61.31%
+BenchmarkEncodeRGBA444-8                   5651131       1699801       -69.92%
+BenchmarkEncodeYCbCr420-8                  2447185       1065880       -56.44%
+BenchmarkEncodeGray-8                      1881926       985907        -47.61%
+BenchmarkFDCT-8                            113.4         24.62         -78.29%
+BenchmarkRGBToYCbCrRow-8                   4841          367           -92.41%
+BenchmarkQuantizeBlock-8                   173.2         24.83         -85.66%
 ```
 
 ### Build tags
