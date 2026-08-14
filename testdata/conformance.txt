@@ -745,9 +745,9 @@ valid/rst_4row.jpg	half	dd88c6e55970fcd1
 valid/rst_8block.jpg	native	bbf059bc693b2e83
 valid/rst_8block.jpg	rgba	07ce1ba2912750db
 valid/rst_8block.jpg	half	dd88c6e55970fcd1
-valid/testimgari.jpg	native	3aa5622d12df047f
-valid/testimgari.jpg	rgba	91a372cf4bb8c03c
-valid/testimgari.jpg	half	05a54c3318b77e99
+valid/testimgari.jpg	native	err:unsupported format
+valid/testimgari.jpg	rgba	err:unsupported format
+valid/testimgari.jpg	half	err:unsupported format
 valid/testimgint.jpg	native	b1f14f6a1bbb7035
 valid/testimgint.jpg	rgba	946642d1e5c8729a
 valid/testimgint.jpg	half	ca757e4fde374d3e

@@ -140,6 +140,12 @@ func (d *decoder) decodeScan() (err error) {
 
 // decodeScanInternal handles the parsing of the SOS header and the main decoding loop.
 func (d *decoder) decodeScanInternal() error {
+	// A SOF9 frame carrying Huffman tables is mislabelled and decodes fine, but
+	// one without them is genuinely arithmetic coded and would come out as noise.
+	if d.isArith && !d.sawDHT {
+		return ErrUnsupported
+	}
+
 	if err := d.decodeLength(); err != nil {
 		return err
 	}

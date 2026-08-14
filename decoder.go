@@ -49,6 +49,8 @@ type decoder struct {
 	subsampleRatio      image.YCbCrSubsampleRatio // The detected YCbCr subsampling ratio.
 	isRGB               bool                      // True if the image is encoded as RGB instead of YCbCr.
 	isBaseline          bool                      // True if the image is a baseline JPEG.
+	isArith             bool                      // True if the frame marker declares arithmetic coding.
+	sawDHT              bool                      // True once a Huffman table has been read.
 	scanned             uint                      // Bitmask of components a baseline scan has covered.
 	isProgressive       bool                      // True if the image is a progressive JPEG.
 	upsampleMethod      UpsampleMethod            // The upsampling method to use.
@@ -957,6 +959,8 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 // decodeDHT decodes the Define Huffman Table segment. It parses Huffman table
 // specifications and builds fast lookup tables for entropy decoding.
 func (d *decoder) decodeDHT() error {
+	d.sawDHT = true
+
 	var counts [16]uint8
 	if err := d.decodeLength(); err != nil {
 		return err
@@ -1279,6 +1283,8 @@ markerLoop:
 			if sofDecoded {
 				return nil, ErrSyntax
 			}
+
+			d.isArith = marker == 0xC9
 
 			d.isBaseline = true
 			d.isProgressive = false

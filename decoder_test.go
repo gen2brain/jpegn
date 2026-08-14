@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -416,36 +417,21 @@ func TestDecodeHugeDimensions(t *testing.T) {
 // This image uses SOF9 (arithmetic coding marker) but we attempt resilient decoding with Huffman.
 // This is an edge case that tests minimal buffer allocation and MCU handling.
 func TestDecode1x1(t *testing.T) {
-	img, err := Decode(bytes.NewReader(test1x1))
+	// The file is a 1x1 arithmetic coded frame: SOF9, a DAC segment and no
+	// Huffman tables. It used to decode with the default Huffman tables and
+	// return 135 where libjpeg returns 190, so it is refused now.
+	if _, err := Decode(bytes.NewReader(test1x1)); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("got %v, want ErrUnsupported", err)
+	}
+
+	cfg, err := DecodeConfig(bytes.NewReader(test1x1))
 	if err != nil {
-		t.Fatalf("Decode failed for 1x1 image: %v (should be resilient and decode anyway)", err)
+		t.Fatalf("DecodeConfig failed: %v", err)
 	}
 
-	// Verify dimensions
-	bounds := img.Bounds()
-	if bounds.Dx() != 1 || bounds.Dy() != 1 {
-		t.Fatalf("Expected 1x1 image, got %dx%d", bounds.Dx(), bounds.Dy())
+	if cfg.Width != 1 || cfg.Height != 1 {
+		t.Fatalf("config %dx%d, want 1x1", cfg.Width, cfg.Height)
 	}
-
-	// Verify we can read the single pixel without panicking
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("Panic when accessing pixel: %v", r)
-		}
-	}()
-
-	// Read the single pixel
-	pixel := img.At(0, 0)
-
-	// Convert to RGBA
-	pixelRGBA := color.RGBAModel.Convert(pixel).(color.RGBA)
-
-	// Just verify we got valid data (can't compare to stdlib since it fails)
-	if pixelRGBA.A != 255 {
-		t.Errorf("Expected alpha 255, got %d", pixelRGBA.A)
-	}
-
-	t.Logf("Successfully decoded 1x1 image (type: %T), pixel value: RGBA%v", img, pixelRGBA)
 }
 
 // TestDecodeSubsampling tests decoding of baseline JPEGs with different subsampling ratios.
@@ -1261,6 +1247,65 @@ func patchSOF(t *testing.T, data []byte, sof byte) []byte {
 	t.Fatalf("no SOF0 marker found")
 
 	return nil
+}
+
+// stripDHT removes every Huffman table segment, leaving a frame that can only
+// have been arithmetic coded.
+func stripDHT(t *testing.T, data []byte) []byte {
+	t.Helper()
+
+	out := append([]byte(nil), data[:2]...)
+
+	for i := 2; i+3 < len(data); {
+		if data[i] != 0xFF {
+			break
+		}
+
+		seg := 2 + (int(data[i+2])<<8 | int(data[i+3]))
+		if data[i+1] != 0xC4 {
+			out = append(out, data[i:i+seg]...)
+		}
+
+		if data[i+1] == 0xDA {
+			return append(out, data[i+seg:]...)
+		}
+
+		i += seg
+	}
+
+	t.Fatal("no SOS marker found")
+
+	return nil
+}
+
+// TestDecodeArithmeticRejected checks that a frame which can only be arithmetic
+// coded is refused rather than decoded as noise, while one that merely claims
+// arithmetic but carries Huffman tables still decodes.
+func TestDecodeArithmeticRejected(t *testing.T) {
+	mislabelled := patchSOF(t, test420, 0xC9)
+
+	got, err := Decode(bytes.NewReader(mislabelled), &Options{ToRGBA: true})
+	if err != nil {
+		t.Fatalf("SOF9 with Huffman tables: %v", err)
+	}
+
+	want, err := Decode(bytes.NewReader(test420), &Options{ToRGBA: true})
+	if err != nil {
+		t.Fatalf("Decode failed for the baseline original: %v", err)
+	}
+
+	b := got.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if got.At(x, y) != want.At(x, y) {
+				t.Fatalf("pixel (%d,%d) differs from the baseline decode", x, y)
+			}
+		}
+	}
+
+	if _, err := Decode(bytes.NewReader(stripDHT(t, mislabelled))); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("SOF9 without Huffman tables: got %v, want ErrUnsupported", err)
+	}
 }
 
 // TestDecodeExtendedSequential decodes a SOF1 frame and checks it matches the SOF0 original.
