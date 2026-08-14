@@ -47,8 +47,8 @@ func TestQuantizeBlockMatchesScalar(t *testing.T) {
 			}
 
 			var want, got [64]int32
-			quantizeBlockScalar(&want, &src, &recip, &half)
-			quantizeBlock(&got, &src, &recip, &half)
+			wantMask := quantizeBlockScalar(&want, &src, &recip, &half)
+			gotMask := quantizeBlock(&got, &src, &recip, &half)
 
 			if got != want {
 				for i := range got {
@@ -57,6 +57,10 @@ func TestQuantizeBlockMatchesScalar(t *testing.T) {
 							qval, i, src[i], got[i], want[i])
 					}
 				}
+			}
+
+			if gotMask != wantMask {
+				t.Fatalf("qval %d case %d mask: got %064b, want %064b", qval, n, gotMask, wantMask)
 			}
 		}
 	}
@@ -74,11 +78,15 @@ func TestQuantizeBlockExhaustive(t *testing.T) {
 			}
 
 			var want, got [64]int32
-			quantizeBlockScalar(&want, &src, &recip, &half)
-			quantizeBlock(&got, &src, &recip, &half)
+			wantMask := quantizeBlockScalar(&want, &src, &recip, &half)
+			gotMask := quantizeBlock(&got, &src, &recip, &half)
 
 			if got != want {
 				t.Fatalf("qval %d base %d: got %v want %v", qval, base, got, want)
+			}
+
+			if gotMask != wantMask {
+				t.Fatalf("qval %d base %d mask: got %064b, want %064b", qval, base, gotMask, wantMask)
 			}
 		}
 	}
