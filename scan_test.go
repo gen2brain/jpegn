@@ -316,3 +316,28 @@ func (d *decoder) skipToScan() error {
 		}
 	}
 }
+
+// signExtendRef is the EXTEND procedure of the JPEG standard, written against
+// the top bit rather than a threshold so it does not mirror either variant.
+func signExtendRef(value, valBits int) int {
+	if value>>(valBits-1) == 0 {
+		return value - (1 << valBits) + 1
+	}
+
+	return value
+}
+
+// TestSignExtendExhaustive sweeps every magnitude of every width. There are two
+// signExtend implementations behind build tags, so whichever one this build
+// selected is the one checked here.
+func TestSignExtendExhaustive(t *testing.T) {
+	for valBits := 1; valBits <= 16; valBits++ {
+		for value := 0; value < 1<<valBits; value++ {
+			got := signExtend(value, valBits)
+
+			if want := signExtendRef(value, valBits); got != want {
+				t.Fatalf("signExtend(%d, %d) = %d, want %d", value, valBits, got, want)
+			}
+		}
+	}
+}
