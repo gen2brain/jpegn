@@ -244,48 +244,51 @@ func idct8x8To2x2(blk *[64]int32, out []byte, outOffset int, stride int) {
 	out[outOffset+stride+1] = clamp(((r1 - r3 + 4) >> 3) + 128)
 }
 
-// idct8x8To4x4 performs reduced IDCT for 1/2 scaling (produces 4x4 output from 8x8 DCT block)
-func idct8x8To4x4(blk *[64]int32, out []byte, outOffset int, stride int) {
-	// Reduced 4x4 IDCT using AAN algorithm variant
-	// We only process the top-left 4x4 DCT coefficients
+// Fixed-point cosines for the 4-point inverse DCT, scaled by 2^13.
+const (
+	rc1 = 7568 // cos(pi/8)
+	rc2 = 5793 // cos(2*pi/8), also 1/sqrt(2)
+	rc3 = 3135 // cos(3*pi/8)
+)
 
+// idct8x8To4x4 evaluates the 4-point inverse DCT over the top-left 4x4
+// coefficients, the reduction used for 1/2 scaling.
+func idct8x8To4x4(blk *[64]int32, out []byte, outOffset int, stride int) {
 	var tmp [16]int32
 
-	// 1D IDCT on rows (process first 4 rows, first 4 columns)
 	for i := 0; i < 4; i++ {
-		s0 := blk[i*8+0]
-		s1 := blk[i*8+1]
-		s2 := blk[i*8+2]
-		s3 := blk[i*8+3]
+		f0 := blk[i*8+0]
+		f1 := blk[i*8+1]
+		f2 := blk[i*8+2]
+		f3 := blk[i*8+3]
 
-		// Simplified butterfly structure for 4-point IDCT
-		t0 := s0 + s2
-		t1 := s0 - s2
-		t2 := (s1 >> 1) - s3
-		t3 := s1 + (s3 >> 1)
+		a := f0 * rc2
+		t0 := a + f2*rc2
+		t1 := a - f2*rc2
+		p := f1*rc1 + f3*rc3
+		q := f1*rc3 - f3*rc1
 
-		tmp[i*4+0] = t0 + t3
-		tmp[i*4+1] = t1 + t2
-		tmp[i*4+2] = t1 - t2
-		tmp[i*4+3] = t0 - t3
+		tmp[i*4+0] = (t0 + p + (1 << 7)) >> 8
+		tmp[i*4+1] = (t1 + q + (1 << 7)) >> 8
+		tmp[i*4+2] = (t1 - q + (1 << 7)) >> 8
+		tmp[i*4+3] = (t0 - p + (1 << 7)) >> 8
 	}
 
-	// 1D IDCT on columns
 	for i := 0; i < 4; i++ {
-		s0 := tmp[0*4+i]
-		s1 := tmp[1*4+i]
-		s2 := tmp[2*4+i]
-		s3 := tmp[3*4+i]
+		f0 := tmp[0*4+i]
+		f1 := tmp[1*4+i]
+		f2 := tmp[2*4+i]
+		f3 := tmp[3*4+i]
 
-		t0 := s0 + s2
-		t1 := s0 - s2
-		t2 := (s1 >> 1) - s3
-		t3 := s1 + (s3 >> 1)
+		a := f0 * rc2
+		t0 := a + f2*rc2
+		t1 := a - f2*rc2
+		p := f1*rc1 + f3*rc3
+		q := f1*rc3 - f3*rc1
 
-		// Output with proper scaling and level shift
-		out[outOffset+0*stride+i] = clamp(((t0 + t3) >> 3) + 128)
-		out[outOffset+1*stride+i] = clamp(((t1 + t2) >> 3) + 128)
-		out[outOffset+2*stride+i] = clamp(((t1 - t2) >> 3) + 128)
-		out[outOffset+3*stride+i] = clamp(((t0 - t3) >> 3) + 128)
+		out[outOffset+0*stride+i] = clamp(((t0 + p + (1 << 19)) >> 20) + 128)
+		out[outOffset+1*stride+i] = clamp(((t1 + q + (1 << 19)) >> 20) + 128)
+		out[outOffset+2*stride+i] = clamp(((t1 - q + (1 << 19)) >> 20) + 128)
+		out[outOffset+3*stride+i] = clamp(((t0 - p + (1 << 19)) >> 20) + 128)
 	}
 }

@@ -3,6 +3,8 @@ package jpegn
 import (
 	"bytes"
 	"image"
+	"math"
+	"math/rand"
 	"os"
 	"testing"
 )
@@ -364,4 +366,95 @@ func BenchmarkScaledVsDownsample(b *testing.B) {
 			}
 		}
 	})
+}
+
+// refReduced evaluates the true n-point inverse DCT over the top-left n by n
+// coefficients, the reduction the scaled transforms approximate.
+func refReduced(blk *[64]int32, n int) []float64 {
+	out := make([]float64, n*n)
+
+	for y := 0; y < n; y++ {
+		for x := 0; x < n; x++ {
+			sum := 0.0
+
+			for v := 0; v < n; v++ {
+				for u := 0; u < n; u++ {
+					cu, cv := 1.0, 1.0
+					if u == 0 {
+						cu = 1 / math.Sqrt2
+					}
+
+					if v == 0 {
+						cv = 1 / math.Sqrt2
+					}
+
+					sum += cu * cv * float64(blk[v*8+u]) *
+						math.Cos(float64(2*x+1)*float64(u)*math.Pi/(2*float64(n))) *
+						math.Cos(float64(2*y+1)*float64(v)*math.Pi/(2*float64(n)))
+				}
+			}
+
+			out[y*n+x] = math.Max(0, math.Min(255, sum/4+128))
+		}
+	}
+
+	return out
+}
+
+// TestScaledIdctAgainstReference checks each reduced transform against the
+// inverse DCT it stands for, which the end-to-end tests cannot isolate.
+func TestScaledIdctAgainstReference(t *testing.T) {
+	rng := rand.New(rand.NewSource(5))
+
+	cases := []struct {
+		name string
+		n    int
+		fn   func(*[64]int32, []byte, int, int)
+	}{
+		{"4x4", 4, idct8x8To4x4},
+		{"2x2", 2, idct8x8To2x2},
+		{"1x1", 1, idct8x8To1x1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var sum, worst float64
+
+			var cnt int
+
+			for iter := 0; iter < 2000; iter++ {
+				var blk [64]int32
+
+				blk[0] = int32(rng.Intn(2048)) - 1024
+				for i := 1; i < 64; i++ {
+					if rng.Intn(3) == 0 {
+						blk[i] = int32(rng.Intn(256)) - 128
+					}
+				}
+
+				out := make([]byte, tc.n*tc.n)
+				tc.fn(&blk, out, 0, tc.n)
+
+				ref := refReduced(&blk, tc.n)
+
+				for i := range out {
+					d := math.Abs(float64(out[i]) - ref[i])
+					sum += d
+					cnt++
+
+					if d > worst {
+						worst = d
+					}
+				}
+			}
+
+			mean := sum / float64(cnt)
+
+			t.Logf("mean=%.3f max=%.3f", mean, worst)
+
+			if mean > 0.5 || worst > 1.5 {
+				t.Errorf("mean %.3f max %.3f, want mean under 0.5 and max under 1.5", mean, worst)
+			}
+		})
+	}
 }
