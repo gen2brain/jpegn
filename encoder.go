@@ -194,7 +194,8 @@ var encoderPool = sync.Pool{
 	},
 }
 
-// Encode writes the image m to w in baseline JPEG format.
+// Encode writes the image m to w as JPEG, baseline unless
+// [EncodeOptions.Progressive] is set.
 func Encode(w io.Writer, m image.Image, opts ...*EncodeOptions) error {
 	b := m.Bounds()
 	if b.Dx() <= 0 || b.Dy() <= 0 || b.Dx() > 65535 || b.Dy() > 65535 {

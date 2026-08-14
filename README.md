@@ -42,7 +42,7 @@ The encoder writes baseline and progressive JPEG, grayscale or YCbCr, at 4:4:4, 
 identical to libjpeg-turbo at quality 50. Optimized Huffman tables save ~4% at quality 50,
 rising to ~20% at quality 95; progressive mode ~9% more on flat color and hard edges, and little
 or nothing on detailed photographic content; jpegli's adaptive dead zone ~10% again. All three
-together are ~17% below plain baseline at ~2.1x the encode time.
+together are ~17% below plain baseline at ~1.6x the encode time.
 
 Against the standard library, ~1.9x on progressive and ~3.1x on baseline decode, ~2.9x decoding
 straight to RGBA, and ~4.5x to ~6.3x on encode, in two allocations rather than twelve. SIMD is

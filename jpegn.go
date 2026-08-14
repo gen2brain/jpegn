@@ -1,3 +1,82 @@
+/*
+Package jpegn decodes and encodes JPEG images.
+
+	img, err := jpegn.Decode(r)
+
+[Decode] returns the image in its native color space, *[image.YCbCr],
+*[image.Gray], *[image.CMYK] or *[image.RGBA]. The package registers itself
+with [image.RegisterFormat], so [image.Decode] works once it is imported for
+side effects.
+
+It reads baseline and progressive JPEG, 8-bit, grayscale, YCbCr, RGB, CMYK and
+YCCK, any power-of-two subsampling, and restart intervals. Truncated or corrupt
+scan data decodes as far as it goes rather than failing, which is what a viewer
+wants from a partial file. Arithmetic coding and 12-bit samples are refused
+with [ErrUnsupported]; a broken file gives [ErrSyntax].
+
+# Options
+
+[Options] are passed to any of the decode functions and default to zero:
+
+	img, err := jpegn.Decode(r, &jpegn.Options{
+		ToRGBA:     true, // RGBA instead of the native color space
+		AutoRotate: true, // apply the EXIF orientation
+		ScaleDenom: 2,    // decode at half size
+	})
+
+[Options.ScaleDenom] downscales inside the inverse transform, so 2, 4 and 8
+cost less than a full decode rather than more. [Options.UpsampleMethod] selects
+the chroma filter for RGBA output, [NearestNeighbor] or the slower, smoother
+[CatmullRom].
+
+[DecodeConfig] reports the dimensions and color model without decoding the
+image, as they are stored in the frame header and ignoring EXIF orientation.
+
+# Encoding
+
+[Encode] writes baseline JPEG by default:
+
+	err := jpegn.Encode(w, img, &jpegn.EncodeOptions{Quality: 90})
+
+Quality runs from 1 to 100 and zero selects [DefaultQuality].
+[EncodeOptions.Subsampling] follows the source unless it is set, so an
+*[image.YCbCr] keeps its native ratio and its planes are encoded without
+resampling.
+
+Three options trade encode time for size, and all three are off by default
+because each changes the output:
+
+	err := jpegn.Encode(w, img, &jpegn.EncodeOptions{
+		Quality:              90,
+		OptimizeCoding:       true, // Huffman tables from the real statistics
+		Progressive:          true, // spectral selection and successive approximation
+		AdaptiveQuantization: true, // drop coefficients the eye is least likely to miss
+	})
+
+[EncodeOptions.OptimizeCoding] saves about 4% at quality 50, rising to about
+20% at quality 95. [EncodeOptions.Progressive] saves about 9% more on flat
+color and hard edges, and little or nothing on detailed photographic content.
+[EncodeOptions.AdaptiveQuantization] is jpegli's per-block dead zone, worth
+about 10% again; it does not vary the quantization table, so the result is an
+ordinary JPEG that any decoder reads. Together they are about 17% below plain
+baseline at about 1.6x the encode time.
+
+[EncodeOptions.RestartInterval] puts a restart marker every so many MCUs, which
+bounds the damage a corrupt run of bytes can do.
+
+# Metadata
+
+[DecodeExif] parses the EXIF an image carries, and [RawExif] returns the APP1
+segment whole. Both report [ErrNoEXIF] when the file has none.
+
+	exif, err := jpegn.DecodeExif(r)
+
+To carry metadata through a decode and re-encode, hand the raw segment back as
+[EncodeOptions.Exif] and anything else, an ICC profile for instance, as
+[EncodeOptions.Segments]. [EncodeOptions.ResetOrientation] rewrites the
+orientation tag to 1, which is what an encoder that has already applied the
+rotation should write.
+*/
 package jpegn
 
 import (
