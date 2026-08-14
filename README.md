@@ -41,8 +41,9 @@ within 0.2% of the standard library at the same quality and subsampling, and ide
 libjpeg-turbo at quality 50; optimized Huffman tables save ~4% at quality 50, rising to ~20% at
 quality 95.
 
-Against the standard library, ~1.7x on progressive and ~2.5x on baseline decode, and ~3.5x on
-encode, in two allocations rather than twelve. SIMD is worth ~1.3x to ~3x over `-tags noasm`.
+Against the standard library, ~1.9x on progressive and ~3.1x on baseline decode, ~2.9x decoding
+straight to RGBA, and ~4x to ~5.5x on encode, in two allocations rather than twelve. SIMD is
+worth ~1.3x to ~3.4x over `-tags noasm`.
 
 ### License
 
