@@ -576,3 +576,84 @@ func TestFuzzyErosion(t *testing.T) {
 		}
 	}
 }
+
+// preErosionCases builds rows covering all 256 samples by 1021 neighbor sums.
+func preErosionCases() (row, rowT, rowB []byte) {
+	for cv := 0; cv < 256; cv++ {
+		for s := 0; s <= 1020; s++ {
+			l := min(s, 255)
+			r := min(s-l, 255)
+			t := min(s-l-r, 255)
+			b := s - l - r - t
+
+			row = append(row, byte(l), byte(cv), byte(r), byte(cv))
+			rowT = append(rowT, byte(cv), byte(t), byte(cv), byte(cv))
+			rowB = append(rowB, byte(cv), byte(b), byte(cv), byte(cv))
+		}
+	}
+
+	return row, rowT, rowB
+}
+
+// TestPreErosionRowMatchesScalar checks the kernel against the scalar reference.
+func TestPreErosionRowMatchesScalar(t *testing.T) {
+	check := func(name string, row, rowT, rowB []byte, acc bool) {
+		t.Helper()
+
+		n := len(row)
+		got := make([]float32, n)
+		want := make([]float32, n)
+
+		for i := range got {
+			got[i] = float32(i%7) * 0.5
+			want[i] = got[i]
+		}
+
+		preErosionRow(got, row, rowT, rowB, acc)
+		preErosionRowScalar(want, row, rowT, rowB, acc)
+
+		for i := range got {
+			if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
+				t.Fatalf("%s acc=%v: column %d of %d: got %g (%08x), want %g (%08x)",
+					name, acc, i, n, got[i], math.Float32bits(got[i]),
+					want[i], math.Float32bits(want[i]))
+			}
+		}
+	}
+
+	row, rowT, rowB := preErosionCases()
+	t.Logf("exhaustive sweep: %d columns", len(row))
+
+	for _, acc := range []bool{false, true} {
+		check("sweep", row, rowT, rowB, acc)
+	}
+
+	rng := rand.New(rand.NewSource(41))
+
+	for _, n := range []int{8, 16, 24, 32, 40, 64, 128, 129, 255, 256, 1024} {
+		r := make([]byte, n)
+		tt := make([]byte, n)
+		bb := make([]byte, n)
+
+		for i := 0; i < n; i++ {
+			r[i], tt[i], bb[i] = byte(rng.Intn(256)), byte(rng.Intn(256)), byte(rng.Intn(256))
+		}
+
+		for _, acc := range []bool{false, true} {
+			check("random", r, tt, bb, acc)
+		}
+	}
+
+	for _, v := range []byte{0, 1, 127, 128, 254, 255} {
+		n := 64
+		r := bytes.Repeat([]byte{v}, n)
+		hi := bytes.Repeat([]byte{255}, n)
+		lo := bytes.Repeat([]byte{0}, n)
+
+		for _, acc := range []bool{false, true} {
+			check("flat", r, hi, lo, acc)
+			check("flat", r, lo, hi, acc)
+			check("flat", r, r, r, acc)
+		}
+	}
+}

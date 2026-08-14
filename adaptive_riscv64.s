@@ -1,0 +1,80 @@
+//go:build riscv64 && riscv64.rva23u64 && !noasm
+
+#include "textflag.h"
+
+// RVV pre-erosion row, bit-identical to preErosionRowScalar.
+
+// func preErosionRVV(dst *float32, row, rowT, rowB *byte, lut *float32, n int, acc uint32)
+TEXT ·preErosionRVV(SB), NOSPLIT, $0-52
+	MOV dst+0(FP), X10
+	MOV row+8(FP), X11
+	MOV rowT+16(FP), X12
+	MOV rowB+24(FP), X13
+	MOV lut+32(FP), X18
+	MOV n+40(FP), X14
+	MOVWU acc+48(FP), X19
+
+	ADD $-1, X11, X16
+	ADD $1, X11, X17
+
+	MOV  $0x3e4ccccd, X20
+	FMVSX X20, F0
+	MOV  $0x480e0641, X20
+	FMVSX X20, F1
+	MOV  $0x41e00000, X20
+	FMVSX X20, F2
+	MOV  $0x3e800000, X20
+	FMVSX X20, F3
+
+loop:
+	VSETVLI X14, E8, M1, TA, MA, X15
+	VLE8V   (X11), V0
+	VLE8V   (X16), V1
+	VLE8V   (X17), V2
+	VLE8V   (X12), V3
+	VLE8V   (X13), V4
+
+	VSETVLI  X14, E32, M4, TA, MA, X15
+	VZEXTVF4 V0, V8
+	VZEXTVF4 V1, V12
+	VZEXTVF4 V2, V16
+	VZEXTVF4 V3, V20
+	VZEXTVF4 V4, V24
+
+	VSLLVI $2, V8, V28
+	VSUBVV V12, V28, V28
+	VSUBVV V16, V28, V28
+	VSUBVV V20, V28, V28
+	VSUBVV V24, V28, V28
+
+	VFCVTFXV V28, V28
+
+	VSLLVI    $2, V8, V8
+	VLUXEI32V (X18), V8, V12
+
+	VFMULVV V12, V28, V28
+	VFMULVV V28, V28, V28
+	VFMINVF F0, V28, V28
+	VFMULVF F1, V28, V28
+	VFADDVF F2, V28, V28
+	VFSQRTV V28, V28
+	VFMULVF F3, V28, V28
+
+	VLE32V (X10), V16
+	VMVVX  X19, V20
+	VANDVV V20, V16, V16
+	VFADDVV V16, V28, V28
+
+	VSE32V V28, (X10)
+
+	ADD  X15, X11
+	ADD  X15, X12
+	ADD  X15, X13
+	ADD  X15, X16
+	ADD  X15, X17
+	SLLI $2, X15, X21
+	ADD  X21, X10
+	SUB  X15, X14
+	BNEZ X14, loop
+
+	RET

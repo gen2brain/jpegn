@@ -204,40 +204,10 @@ func (a *aqField) computePreErosion(c *encComponent) {
 
 	for y := 0; y < ysize; y++ {
 		row := c.plane[y*c.stride : y*c.stride+xsize]
-		rowT := c.plane[max(y-1, 0)*c.stride:]
-		rowB := c.plane[min(y+1, ysize-1)*c.stride:]
+		rowT := c.plane[max(y-1, 0)*c.stride:][:xsize]
+		rowB := c.plane[min(y+1, ysize-1)*c.stride:][:xsize]
 
-		acc := y&3 != 0
-		rowT = rowT[:xsize]
-		rowB = rowB[:xsize]
-
-		// The left and right neighbors roll forward, so each sample is read
-		// once instead of three times, and the edges clamp by construction.
-		lv, cv := int(row[0]), int(row[0])
-		rv := int(row[1])
-
-		for x := 0; x < xsize; x++ {
-			d4 := 4*cv - rv - lv - int(rowT[x]) - int(rowB[x])
-
-			diff := gammaDiffLUT[cv] * float32(d4)
-			if diff *= diff; diff > aqDiffLimit {
-				diff = aqDiffLimit
-			}
-
-			diff = aqMaskingSqrt(diff)
-
-			if acc {
-				diff += a.diff[x]
-			}
-
-			a.diff[x] = diff
-
-			lv, cv = cv, rv
-
-			if x+2 < xsize {
-				rv = int(row[x+2])
-			}
-		}
+		preErosionRow(a.diff[:xsize], row, rowT, rowB, y&3 != 0)
 
 		if y&3 != 3 {
 			continue
