@@ -1,3 +1,5 @@
+//go:build !amd64 || noasm
+
 package jpegn
 
 // idctScaled dispatches to the appropriate IDCT function based on the scale denominator.

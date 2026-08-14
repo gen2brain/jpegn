@@ -458,3 +458,47 @@ func TestScaledIdctAgainstReference(t *testing.T) {
 		})
 	}
 }
+
+// TestScaledIdctMatchesScalar checks the assembly 4x4 transform against the
+// pure Go one over the coefficient range the decoder clamps to.
+func TestScaledIdctMatchesScalar(t *testing.T) {
+	rng := rand.New(rand.NewSource(9))
+
+	const stride = 13
+
+	for iter := 0; iter < 200000; iter++ {
+		var blk [64]int32
+
+		switch iter % 4 {
+		case 0:
+			blk[0] = dequantLimit
+		case 1:
+			for i := 0; i < 32; i++ {
+				blk[i] = -dequantLimit
+			}
+		case 2:
+			for i := range blk {
+				blk[i] = int32(rng.Intn(2*dequantLimit+1)) - dequantLimit
+			}
+		default:
+			blk[0] = int32(rng.Intn(2048)) - 1024
+			for i := 1; i < 64; i++ {
+				if rng.Intn(3) == 0 {
+					blk[i] = int32(rng.Intn(256)) - 128
+				}
+			}
+		}
+
+		want := make([]byte, stride*4)
+		got := make([]byte, stride*4)
+
+		idct8x8To4x4(&blk, want, 0, stride)
+		idctScaled(&blk, got, 0, stride, 2)
+
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("iter %d byte %d: got %d, want %d", iter, i, got[i], want[i])
+			}
+		}
+	}
+}
