@@ -15,6 +15,47 @@ import (
 //go:embed testdata/*.jpg
 var fuzzCorpus embed.FS
 
+// eachTier runs f once per instruction set the machine supports, so the narrow
+// kernels are tested on a wide machine.
+func eachTier(t *testing.T, f func(t *testing.T)) {
+	t.Helper()
+
+	tiers := simdTiers()
+	if len(tiers) == 1 {
+		f(t)
+
+		return
+	}
+
+	for _, tier := range tiers {
+		t.Run(tier, func(t *testing.T) {
+			defer setTier(tiers[len(tiers)-1])
+			setTier(tier)
+			f(t)
+		})
+	}
+}
+
+// eachTierB benchmarks f once per instruction set the machine supports.
+func eachTierB(b *testing.B, f func(b *testing.B)) {
+	b.Helper()
+
+	tiers := simdTiers()
+	if len(tiers) == 1 {
+		f(b)
+
+		return
+	}
+
+	for _, tier := range tiers {
+		b.Run(tier, func(b *testing.B) {
+			defer setTier(tiers[len(tiers)-1])
+			setTier(tier)
+			f(b)
+		})
+	}
+}
+
 // addFuzzCorpus adds all embedded testdata/*.jpg files to the fuzzing seed corpus.
 func addFuzzCorpus(f *testing.F) {
 	f.Helper()

@@ -20,19 +20,29 @@ func makeUpsampleComponent(w, h, stride int) *component {
 // TestUpsampleCatmullRomAssembly compares the H/V upsamplers against the scalar
 // reference across sizes exercising the SIMD middle, its tail, and the edges.
 func TestUpsampleCatmullRomAssembly(t *testing.T) {
+	eachTier(t, testUpsampleCatmullRomAssembly)
+}
+
+func testUpsampleCatmullRomAssembly(t *testing.T) {
 	cases := []struct{ w, h, stride int }{
 		{3, 3, 3},
 		{8, 8, 8},
+		{8, 16, 8},
 		{11, 4, 11},
+		{13, 20, 13},
 		{16, 5, 16},
 		{19, 7, 19},
 		{23, 9, 23},
+		{23, 18, 32},
 		{31, 3, 31},
 		{32, 32, 32},
 		{33, 6, 33},
+		{33, 19, 40},
 		{64, 17, 64},
 		{100, 8, 128}, // stride > width
+		{100, 33, 128},
 		{487, 5, 496},
+		{487, 17, 496},
 	}
 
 	for _, tc := range cases {
@@ -116,6 +126,10 @@ func isEqual(t *testing.T, got, want []byte, context string) {
 
 // TestUpsampleNearestNeighbor verifies the nearest-neighbor upsampling implementation.
 func TestUpsampleNearestNeighbor(t *testing.T) {
+	eachTier(t, testUpsampleNearestNeighbor)
+}
+
+func testUpsampleNearestNeighbor(t *testing.T) {
 	tests := []struct {
 		name      string
 		initialW  int
@@ -203,6 +217,10 @@ func TestUpsampleNearestNeighbor(t *testing.T) {
 // TestUpsampleNearestNeighborAssembly validates the assembly implementation against the generic Go implementation
 // across various dimensions to catch boundary and pointer bugs.
 func TestUpsampleNearestNeighborAssembly(t *testing.T) {
+	eachTier(t, testUpsampleNearestNeighborAssembly)
+}
+
+func testUpsampleNearestNeighborAssembly(t *testing.T) {
 	testCases := []struct {
 		name     string
 		initialW int
@@ -286,6 +304,10 @@ func TestUpsampleNearestNeighborAssembly(t *testing.T) {
 // TestUpsampleHCatmullRom verifies the horizontal Catmull-Rom upsampling.
 // The expected values are pre-calculated based on the filter constants and symmetric boundary conditions.
 func TestUpsampleHCatmullRom(t *testing.T) {
+	eachTier(t, testUpsampleHCatmullRom)
+}
+
+func testUpsampleHCatmullRom(t *testing.T) {
 	tests := []struct {
 		name           string
 		inputPixels    []byte
@@ -336,6 +358,10 @@ func TestUpsampleHCatmullRom(t *testing.T) {
 // TestUpsampleVCatmullRom verifies the vertical Catmull-Rom upsampling.
 // The filter logic is identical to horizontal, so the output values should be the same.
 func TestUpsampleVCatmullRom(t *testing.T) {
+	eachTier(t, testUpsampleVCatmullRom)
+}
+
+func testUpsampleVCatmullRom(t *testing.T) {
 	tests := []struct {
 		name           string
 		inputPixels    []byte
@@ -385,6 +411,10 @@ func TestUpsampleVCatmullRom(t *testing.T) {
 
 // BenchmarkUpsampleNearestNeighbor measures the performance of the nearest-neighbor upsampling.
 func BenchmarkUpsampleNearestNeighbor(b *testing.B) {
+	eachTierB(b, benchmarkUpsampleNearestNeighbor)
+}
+
+func benchmarkUpsampleNearestNeighbor(b *testing.B) {
 	const (
 		initialW = 512
 		initialH = 512
@@ -413,6 +443,10 @@ func BenchmarkUpsampleNearestNeighbor(b *testing.B) {
 
 // BenchmarkUpsampleCatmullRom measures the performance of the Catmull-Rom upsampling.
 func BenchmarkUpsampleCatmullRom(b *testing.B) {
+	eachTierB(b, benchmarkUpsampleCatmullRom)
+}
+
+func benchmarkUpsampleCatmullRom(b *testing.B) {
 	const (
 		initialW = 512
 		initialH = 512

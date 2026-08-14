@@ -48,6 +48,10 @@ func encodeToBytes(t *testing.T, m image.Image, opts *EncodeOptions) []byte {
 
 // TestEncodeRoundTrip checks stdlib decodability and reconstruction error.
 func TestEncodeRoundTrip(t *testing.T) {
+	eachTier(t, testEncodeRoundTrip)
+}
+
+func testEncodeRoundTrip(t *testing.T) {
 	sizes := []image.Point{{1, 1}, {7, 3}, {8, 8}, {16, 16}, {17, 9}, {65, 33}, {128, 96}}
 	subs := []struct {
 		name string
@@ -90,6 +94,10 @@ func TestEncodeRoundTrip(t *testing.T) {
 
 // TestEncodeOwnDecoderMatchesStdlib checks both decoders agree on our output.
 func TestEncodeOwnDecoderMatchesStdlib(t *testing.T) {
+	eachTier(t, testEncodeOwnDecoderMatchesStdlib)
+}
+
+func testEncodeOwnDecoderMatchesStdlib(t *testing.T) {
 	src := synthImage(129, 71)
 
 	for _, sub := range []Subsampling{Subsample444, Subsample422, Subsample440, Subsample420} {
@@ -665,6 +673,10 @@ func benchStdlib(b *testing.B, m image.Image, quality int) {
 // Only the 420 rows are comparable; stdlib always writes 4:2:0 for color.
 
 func BenchmarkEncodeRGBA420(b *testing.B) {
+	eachTierB(b, benchmarkEncodeRGBA420)
+}
+
+func benchmarkEncodeRGBA420(b *testing.B) {
 	benchEncode(b, photoRGBA(b), &EncodeOptions{Quality: 75, Subsampling: Subsample420})
 }
 
@@ -829,6 +841,10 @@ func TestEncodeScanIsStuffed(t *testing.T) {
 
 // TestEncodeStable pins the encoder output on every architecture and build tag.
 func TestEncodeStable(t *testing.T) {
+	eachTier(t, testEncodeStable)
+}
+
+func testEncodeStable(t *testing.T) {
 	cases := []struct {
 		sub  Subsampling
 		q    int
@@ -1082,6 +1098,10 @@ func TestEncodeProgressiveRestart(t *testing.T) {
 
 // TestDownsampleRow2x2MatchesScalar checks the box filter against the reference.
 func TestDownsampleRow2x2MatchesScalar(t *testing.T) {
+	eachTier(t, testDownsampleRow2x2MatchesScalar)
+}
+
+func testDownsampleRow2x2MatchesScalar(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 
 	for _, n := range []int{0, 1, 2, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 255, 256} {
@@ -1116,6 +1136,10 @@ func TestDownsampleRow2x2MatchesScalar(t *testing.T) {
 
 // TestDownsampleRow2x2Exhaustive checks every sample pair in both source rows.
 func TestDownsampleRow2x2Exhaustive(t *testing.T) {
+	eachTier(t, testDownsampleRow2x2Exhaustive)
+}
+
+func testDownsampleRow2x2Exhaustive(t *testing.T) {
 	const n = 256
 
 	src0 := make([]byte, n*2)
@@ -1155,6 +1179,10 @@ func TestDownsampleRow2x2Exhaustive(t *testing.T) {
 }
 
 func BenchmarkDownsampleRow2x2(b *testing.B) {
+	eachTierB(b, benchmarkDownsampleRow2x2)
+}
+
+func benchmarkDownsampleRow2x2(b *testing.B) {
 	const n = 512
 
 	src0 := make([]byte, n*2)

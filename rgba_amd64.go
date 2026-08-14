@@ -11,12 +11,28 @@ func rgbToRGBAAVX2(dst, r, g, b []byte)
 //go:noescape
 func grayToRGBAAVX2(dst, gray []byte)
 
+//go:noescape
+func ycbcrToRGBASSE(dst, y, cb, cr []byte)
+
+//go:noescape
+func rgbToRGBASSE(dst, r, g, b []byte)
+
+//go:noescape
+func grayToRGBASSE(dst, gray []byte)
+
 // yCbCrToRGBA converts a 3-component YCbCr image to a 4-channel RGBA buffer.
 func yCbCrToRGBA(y, cb, cr *component, dst []byte, width, height int) {
-	if isAVX2 && width > 0 && height > 0 && len(dst) >= width*height*4 {
-		ycbcrToRGBARows(y, cb, cr, dst, width, height, 16, ycbcrToRGBAAVX2)
+	if width > 0 && height > 0 && len(dst) >= width*height*4 {
+		switch {
+		case hasAVX2:
+			ycbcrToRGBARows(y, cb, cr, dst, width, height, 16, ycbcrToRGBAAVX2)
 
-		return
+			return
+		case hasSSE4:
+			ycbcrToRGBARows(y, cb, cr, dst, width, height, 8, ycbcrToRGBASSE)
+
+			return
+		}
 	}
 
 	yCbCrToRGBAScalar(y, cb, cr, dst, width, height)
@@ -24,10 +40,17 @@ func yCbCrToRGBA(y, cb, cr *component, dst []byte, width, height int) {
 
 // rgbToRGBA converts a 3-component RGB image to a 4-channel RGBA buffer.
 func rgbToRGBA(r, g, b *component, dst []byte, width, height int) {
-	if isAVX2 && width > 0 && height > 0 && len(dst) >= width*height*4 {
-		rgbToRGBARows(r, g, b, dst, width, height, 32, rgbToRGBAAVX2)
+	if width > 0 && height > 0 && len(dst) >= width*height*4 {
+		switch {
+		case hasAVX2:
+			rgbToRGBARows(r, g, b, dst, width, height, 32, rgbToRGBAAVX2)
 
-		return
+			return
+		case hasSSE4:
+			rgbToRGBARows(r, g, b, dst, width, height, 16, rgbToRGBASSE)
+
+			return
+		}
 	}
 
 	rgbToRGBAScalar(r, g, b, dst, width, height)
@@ -35,10 +58,17 @@ func rgbToRGBA(r, g, b *component, dst []byte, width, height int) {
 
 // grayToRGBA converts a single-component grayscale image to a 4-channel RGBA buffer.
 func grayToRGBA(c *component, dst []byte, width, height int) {
-	if isAVX2 && width > 0 && height > 0 && len(dst) >= width*height*4 {
-		grayToRGBARows(c, dst, width, height, 32, grayToRGBAAVX2)
+	if width > 0 && height > 0 && len(dst) >= width*height*4 {
+		switch {
+		case hasAVX2:
+			grayToRGBARows(c, dst, width, height, 32, grayToRGBAAVX2)
 
-		return
+			return
+		case hasSSE4:
+			grayToRGBARows(c, dst, width, height, 16, grayToRGBASSE)
+
+			return
+		}
 	}
 
 	grayToRGBAScalar(c, dst, width, height)

@@ -275,3 +275,211 @@ gray_to_rgba_loop:
 done_gray:
 	VZEROUPPER
 	RET
+
+// Broadcast a 32-bit immediate into all four lanes of DST. Clobbers AX.
+#define BCASTD(val, dst) \
+	MOVL   $val, AX;     \
+	MOVL   AX, dst;      \
+	PSHUFD $0, dst, dst
+
+// INTERLEAVE_STORE_RGBA_SSE interleaves RG (X4/X5) and BA (X6/X7) into 16 RGBA
+// pixels and stores 64 bytes at (DI). Clobbers X8-X11.
+#define INTERLEAVE_STORE_RGBA_SSE() \
+	MOVOU     X4, X8;      \
+	PUNPCKLWL X6, X8;      \
+	MOVOU     X4, X9;      \
+	PUNPCKHWL X6, X9;      \
+	MOVOU     X5, X10;     \
+	PUNPCKLWL X7, X10;     \
+	MOVOU     X5, X11;     \
+	PUNPCKHWL X7, X11;     \
+	MOVOU     X8, (DI);    \
+	MOVOU     X9, 16(DI);  \
+	MOVOU     X10, 32(DI); \
+	MOVOU     X11, 48(DI)
+
+// func ycbcrToRGBASSE(dst, y, cb, cr []byte)
+// Processes 8 pixels per iteration.
+TEXT ·ycbcrToRGBASSE(SB), NOSPLIT, $0-96
+	MOVQ dst_base+0(FP), DI
+	MOVQ y_base+24(FP), R8
+	MOVQ cb_base+48(FP), R9
+	MOVQ cr_base+72(FP), R10
+	MOVQ y_len+32(FP), CX
+
+	BCASTD(359, X10)
+	BCASTD(454, X11)
+	BCASTD(88, X12)
+	BCASTD(183, X13)
+	BCASTD(128, X14)
+	PCMPEQB X15, X15
+
+sse_loop_ycbcr:
+	CMPQ CX, $8
+	JL   sse_done_ycbcr
+
+	PMOVZXBD (R8), X0
+	PSLLL    $8, X0
+	PMOVZXBD 4(R8), X1
+	PSLLL    $8, X1
+
+	PMOVZXBD (R9), X2
+	PSUBL    X14, X2
+	PMOVZXBD 4(R9), X3
+	PSUBL    X14, X3
+
+	PMOVZXBD (R10), X4
+	PSUBL    X14, X4
+	PMOVZXBD 4(R10), X5
+	PSUBL    X14, X5
+
+	// G = (Y' - 88*Cb' - 183*Cr' + 128) >> 8
+	MOVOU  X0, X6
+	MOVOU  X2, X7
+	PMULLD X12, X7
+	PSUBL  X7, X6
+	MOVOU  X4, X7
+	PMULLD X13, X7
+	PSUBL  X7, X6
+	PADDL  X14, X6
+	PSRAL  $8, X6
+
+	MOVOU  X1, X7
+	MOVOU  X3, X8
+	PMULLD X12, X8
+	PSUBL  X8, X7
+	MOVOU  X5, X8
+	PMULLD X13, X8
+	PSUBL  X8, X7
+	PADDL  X14, X7
+	PSRAL  $8, X7
+
+	PACKSSLW X7, X6
+	PACKUSWB X6, X6
+
+	// R = (Y' + 359*Cr' + 128) >> 8
+	MOVOU  X4, X7
+	PMULLD X10, X7
+	PADDL  X0, X7
+	PADDL  X14, X7
+	PSRAL  $8, X7
+
+	MOVOU  X5, X8
+	PMULLD X10, X8
+	PADDL  X1, X8
+	PADDL  X14, X8
+	PSRAL  $8, X8
+
+	PACKSSLW X8, X7
+	PACKUSWB X7, X7
+
+	// B = (Y' + 454*Cb' + 128) >> 8
+	MOVOU  X2, X8
+	PMULLD X11, X8
+	PADDL  X0, X8
+	PADDL  X14, X8
+	PSRAL  $8, X8
+
+	MOVOU  X3, X9
+	PMULLD X11, X9
+	PADDL  X1, X9
+	PADDL  X14, X9
+	PSRAL  $8, X9
+
+	PACKSSLW X9, X8
+	PACKUSWB X8, X8
+
+	PUNPCKLBW X6, X7
+	MOVOU     X15, X9
+	PUNPCKLBW X9, X8
+
+	MOVOU     X7, X0
+	PUNPCKLWL X8, X0
+	PUNPCKHWL X8, X7
+
+	MOVOU X0, (DI)
+	MOVOU X7, 16(DI)
+
+	ADDQ $8, R8
+	ADDQ $8, R9
+	ADDQ $8, R10
+	ADDQ $32, DI
+	SUBQ $8, CX
+	JMP  sse_loop_ycbcr
+
+sse_done_ycbcr:
+	RET
+
+// func rgbToRGBASSE(dst, r, g, b []byte)
+TEXT ·rgbToRGBASSE(SB), NOSPLIT, $0-96
+	MOVQ dst_base+0(FP), DI
+	MOVQ r_base+24(FP), R8
+	MOVQ g_base+48(FP), R9
+	MOVQ b_base+72(FP), R10
+	MOVQ r_len+32(FP), CX
+
+	PCMPEQB X15, X15
+
+sse_loop_rgb:
+	CMPQ CX, $16
+	JL   sse_done_rgb
+
+	MOVOU (R8), X0
+	MOVOU (R9), X1
+	MOVOU (R10), X2
+	MOVOU X15, X3
+
+	MOVOU     X0, X4
+	PUNPCKLBW X1, X4
+	MOVOU     X0, X5
+	PUNPCKHBW X1, X5
+	MOVOU     X2, X6
+	PUNPCKLBW X3, X6
+	MOVOU     X2, X7
+	PUNPCKHBW X3, X7
+
+	INTERLEAVE_STORE_RGBA_SSE()
+
+	ADDQ $16, R8
+	ADDQ $16, R9
+	ADDQ $16, R10
+	ADDQ $64, DI
+	SUBQ $16, CX
+	JMP  sse_loop_rgb
+
+sse_done_rgb:
+	RET
+
+// func grayToRGBASSE(dst, gray []byte)
+TEXT ·grayToRGBASSE(SB), NOSPLIT, $0-48
+	MOVQ dst_base+0(FP), DI
+	MOVQ gray_base+24(FP), R8
+	MOVQ gray_len+32(FP), CX
+
+	PCMPEQB X15, X15
+
+sse_loop_gray:
+	CMPQ CX, $16
+	JL   sse_done_gray
+
+	MOVOU (R8), X0
+	MOVOU X15, X3
+
+	MOVOU     X0, X4
+	PUNPCKLBW X0, X4
+	MOVOU     X0, X5
+	PUNPCKHBW X0, X5
+	MOVOU     X0, X6
+	PUNPCKLBW X3, X6
+	MOVOU     X0, X7
+	PUNPCKHBW X3, X7
+
+	INTERLEAVE_STORE_RGBA_SSE()
+
+	ADDQ $16, R8
+	ADDQ $64, DI
+	SUBQ $16, CX
+	JMP  sse_loop_gray
+
+sse_done_gray:
+	RET

@@ -46,6 +46,10 @@ func plane8(in *[64]int32, stride int) []byte {
 }
 
 func TestFDCTAgainstReference(t *testing.T) {
+	eachTier(t, testFDCTAgainstReference)
+}
+
+func testFDCTAgainstReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 
 	cases := []struct {
@@ -92,6 +96,10 @@ func TestFDCTAgainstReference(t *testing.T) {
 
 // TestFDCTRange verifies the magnitude bounds the entropy coder relies on.
 func TestFDCTRange(t *testing.T) {
+	eachTier(t, testFDCTRange)
+}
+
+func testFDCTRange(t *testing.T) {
 	rng := rand.New(rand.NewSource(2))
 
 	var maxDC, maxAC int32
@@ -145,6 +153,10 @@ func TestFDCTRange(t *testing.T) {
 
 // TestFDCTMatchesScalar checks the assembly path is bit-identical to pure Go.
 func TestFDCTMatchesScalar(t *testing.T) {
+	eachTier(t, testFDCTMatchesScalar)
+}
+
+func testFDCTMatchesScalar(t *testing.T) {
 	rng := rand.New(rand.NewSource(3))
 
 	gen := []func(i int) int32{
@@ -183,6 +195,10 @@ func TestFDCTMatchesScalar(t *testing.T) {
 
 // TestFDCTDoesNotReadPastBlock checks the transform stays inside its buffers.
 func TestFDCTDoesNotReadPastBlock(t *testing.T) {
+	eachTier(t, testFDCTDoesNotReadPastBlock)
+}
+
+func testFDCTDoesNotReadPastBlock(t *testing.T) {
 	var guard [192]int32
 	for i := range guard {
 		guard[i] = 0x5A5A5A5A
@@ -219,6 +235,10 @@ func TestFDCTDoesNotReadPastBlock(t *testing.T) {
 }
 
 func BenchmarkFDCT(b *testing.B) {
+	eachTierB(b, benchmarkFDCT)
+}
+
+func benchmarkFDCT(b *testing.B) {
 	var src, blk [64]int32
 	for i := range src {
 		src[i] = int32(i*3%256) - 128

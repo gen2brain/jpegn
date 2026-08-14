@@ -415,3 +415,314 @@ done:
 	// Clear the upper 128 bits of all YMM registers before returning (AVX/SSE transition penalty avoidance).
 	VZEROUPPER
 	RET
+
+// Transpose a 4x4 block of dwords held in A-D, clobbering T0-T3.
+#define TRANSPOSE4(a, b, c, d, t0, t1, t2, t3) \
+	MOVOU      a, t0;   \
+	PUNPCKLLQ  b, t0;   \
+	MOVOU      c, t1;   \
+	PUNPCKLLQ  d, t1;   \
+	MOVOU      a, t2;   \
+	PUNPCKHLQ  b, t2;   \
+	MOVOU      c, t3;   \
+	PUNPCKHLQ  d, t3;   \
+	MOVOU      t0, a;   \
+	PUNPCKLQDQ t1, a;   \
+	MOVOU      t0, b;   \
+	PUNPCKHQDQ t1, b;   \
+	MOVOU      t2, c;   \
+	PUNPCKLQDQ t3, c;   \
+	MOVOU      t2, d;   \
+	PUNPCKHQDQ t3, d
+
+// DST = SRC - (CONST * DST).
+#define MULSUB(cnst, src, dst, tmp) \
+	MOVOU  dst, tmp;    \
+	PMULLD cnst, tmp;   \
+	MOVOU  src, dst;    \
+	PSUBL  tmp, dst
+
+// Stages 3 and 4, the rotation and the output sums, leaving the eight
+// unshifted results in X0-X7. Consumes X0-X8 and clobbers X9-X15.
+#define IDCT_STAGE34() \
+	MOVOU  X1, X9;                  \
+	PADDL  X5, X9;                  \
+	MOVOU  X1, X4;                  \
+	PSUBL  X5, X4;                  \
+	MOVOU  X7, X10;                 \
+	PADDL  X3, X10;                 \
+	MOVOU  X7, X11;                 \
+	PSUBL  X3, X11;                 \
+	MOVOU  X8, X12;                 \
+	PADDL  X2, X12;                 \
+	MOVOU  X8, X13;                 \
+	PSUBL  X2, X13;                 \
+	MOVOU  X0, X14;                 \
+	PADDL  X6, X14;                 \
+	MOVOU  X0, X15;                 \
+	PSUBL  X6, X15;                 \
+	MOVOU  X4, X0;                  \
+	PADDL  X11, X0;                 \
+	PMULLD const_181<>(SB), X0;     \
+	PADDL  const_128<>(SB), X0;     \
+	PSRAL  $8, X0;                  \
+	PSUBL  X11, X4;                 \
+	PMULLD const_181<>(SB), X4;     \
+	PADDL  const_128<>(SB), X4;     \
+	PSRAL  $8, X4;                  \
+	MOVOU  X0, X11;                 \
+	MOVOU  X4, X8;                  \
+	MOVOU  X12, X0;                 \
+	PADDL  X9, X0;                  \
+	MOVOU  X14, X1;                 \
+	PADDL  X11, X1;                 \
+	MOVOU  X15, X2;                 \
+	PADDL  X8, X2;                  \
+	MOVOU  X13, X3;                 \
+	PADDL  X10, X3;                 \
+	MOVOU  X13, X4;                 \
+	PSUBL  X10, X4;                 \
+	MOVOU  X15, X5;                 \
+	PSUBL  X8, X5;                  \
+	MOVOU  X14, X6;                 \
+	PSUBL  X11, X6;                 \
+	MOVOU  X12, X7;                 \
+	PSUBL  X9, X7
+
+// Row pass. X0-X7 hold frequencies 0-7; the results replace them.
+#define IDCT_PASS1() \
+	PSLLL  $11, X4;                            \
+	PSLLL  $11, X0;                            \
+	PADDL  const_128<>(SB), X0;                \
+	MOVOU  X1, X8;                             \
+	PADDL  X7, X8;                             \
+	PMULLD const_w7<>(SB), X8;                 \
+	MOVOU  X5, X9;                             \
+	PADDL  X3, X9;                             \
+	PMULLD const_w3<>(SB), X9;                 \
+	PMULLD const_w1mw7<>(SB), X1;              \
+	PADDL  X8, X1;                             \
+	MULSUB(const_w1pw7<>(SB), X8, X7, X10);    \
+	MULSUB(const_w3mw5<>(SB), X9, X5, X10);    \
+	MULSUB(const_w3pw5<>(SB), X9, X3, X10);    \
+	MOVOU  X0, X8;                             \
+	PADDL  X4, X8;                             \
+	PSUBL  X4, X0;                             \
+	MOVOU  X6, X9;                             \
+	PADDL  X2, X9;                             \
+	PMULLD const_w6<>(SB), X9;                 \
+	MULSUB(const_w2pw6<>(SB), X9, X6, X10);    \
+	PMULLD const_w2mw6<>(SB), X2;              \
+	PADDL  X9, X2;                             \
+	IDCT_STAGE34();                            \
+	PSRAL  $8, X0;                             \
+	PSRAL  $8, X1;                             \
+	PSRAL  $8, X2;                             \
+	PSRAL  $8, X3;                             \
+	PSRAL  $8, X4;                             \
+	PSRAL  $8, X5;                             \
+	PSRAL  $8, X6;                             \
+	PSRAL  $8, X7
+
+// Column pass. X0-X7 hold the intermediate rows; the results replace them.
+#define IDCT_PASS2() \
+	PSLLL  $8, X4;                             \
+	PSLLL  $8, X0;                             \
+	PADDL  const_round_pass2<>(SB), X0;        \
+	MOVOU  X1, X8;                             \
+	PADDL  X7, X8;                             \
+	PMULLD const_w7<>(SB), X8;                 \
+	PADDL  const_4<>(SB), X8;                  \
+	MOVOU  X5, X9;                             \
+	PADDL  X3, X9;                             \
+	PMULLD const_w3<>(SB), X9;                 \
+	PADDL  const_4<>(SB), X9;                  \
+	PMULLD const_w1mw7<>(SB), X1;              \
+	PADDL  X8, X1;                             \
+	PSRAL  $3, X1;                             \
+	MULSUB(const_w1pw7<>(SB), X8, X7, X10);    \
+	PSRAL  $3, X7;                             \
+	MULSUB(const_w3mw5<>(SB), X9, X5, X10);    \
+	PSRAL  $3, X5;                             \
+	MULSUB(const_w3pw5<>(SB), X9, X3, X10);    \
+	PSRAL  $3, X3;                             \
+	MOVOU  X0, X8;                             \
+	PADDL  X4, X8;                             \
+	PSUBL  X4, X0;                             \
+	MOVOU  X6, X9;                             \
+	PADDL  X2, X9;                             \
+	PMULLD const_w6<>(SB), X9;                 \
+	PADDL  const_4<>(SB), X9;                  \
+	MULSUB(const_w2pw6<>(SB), X9, X6, X10);    \
+	PSRAL  $3, X6;                             \
+	PMULLD const_w2mw6<>(SB), X2;              \
+	PADDL  X9, X2;                             \
+	PSRAL  $3, X2;                             \
+	IDCT_STAGE34();                            \
+	PSRAL  $14, X0;                            \
+	PADDL  const_128<>(SB), X0;                \
+	PSRAL  $14, X1;                            \
+	PADDL  const_128<>(SB), X1;                \
+	PSRAL  $14, X2;                            \
+	PADDL  const_128<>(SB), X2;                \
+	PSRAL  $14, X3;                            \
+	PADDL  const_128<>(SB), X3;                \
+	PSRAL  $14, X4;                            \
+	PADDL  const_128<>(SB), X4;                \
+	PSRAL  $14, X5;                            \
+	PADDL  const_128<>(SB), X5;                \
+	PSRAL  $14, X6;                            \
+	PADDL  const_128<>(SB), X6;                \
+	PSRAL  $14, X7;                            \
+	PADDL  const_128<>(SB), X7
+
+// Row pass over the four rows at IN(SI), written row-major to OUT(SP).
+#define IDCT_ROWS(in, out) \
+	MOVOU (in+0)(SI), X0;                         \
+	MOVOU (in+32)(SI), X1;                        \
+	MOVOU (in+64)(SI), X2;                        \
+	MOVOU (in+96)(SI), X3;                        \
+	MOVOU (in+16)(SI), X4;                        \
+	MOVOU (in+48)(SI), X5;                        \
+	MOVOU (in+80)(SI), X6;                        \
+	MOVOU (in+112)(SI), X7;                       \
+	TRANSPOSE4(X0, X1, X2, X3, X8, X9, X10, X11); \
+	TRANSPOSE4(X4, X5, X6, X7, X8, X9, X10, X11); \
+	IDCT_PASS1();                                 \
+	TRANSPOSE4(X0, X1, X2, X3, X8, X9, X10, X11); \
+	TRANSPOSE4(X4, X5, X6, X7, X8, X9, X10, X11); \
+	MOVOU X0, (out+0)(SP);                        \
+	MOVOU X4, (out+16)(SP);                       \
+	MOVOU X1, (out+32)(SP);                       \
+	MOVOU X5, (out+48)(SP);                       \
+	MOVOU X2, (out+64)(SP);                       \
+	MOVOU X6, (out+80)(SP);                       \
+	MOVOU X3, (out+96)(SP);                       \
+	MOVOU X7, (out+112)(SP)
+
+// Load the four columns at OFF(SP) into X0-X7.
+#define IDCT_LOADCOLS(off) \
+	MOVOU (off+0)(SP), X0;   \
+	MOVOU (off+32)(SP), X1;  \
+	MOVOU (off+64)(SP), X2;  \
+	MOVOU (off+96)(SP), X3;  \
+	MOVOU (off+128)(SP), X4; \
+	MOVOU (off+160)(SP), X5; \
+	MOVOU (off+192)(SP), X6; \
+	MOVOU (off+224)(SP), X7
+
+// Clip row REG against the low half at OFF(SP) and store eight bytes at DI.
+#define IDCT_STORE(off, reg) \
+	MOVOU    (off)(SP), X8; \
+	PACKSSLW reg, X8;       \
+	PACKUSWB X8, X8;        \
+	MOVQ     X8, (DI);      \
+	ADDQ     CX, DI
+
+// func idctSSE(in *[64]int32, out []byte, offset int, stride int)
+TEXT ·idctSSE(SB), NOSPLIT, $256-48
+	MOVQ in+0(FP), SI
+	MOVQ out_base+8(FP), DI
+	MOVQ offset+32(FP), R8
+	MOVQ stride+40(FP), CX
+	ADDQ R8, DI
+
+	MOVOU 0(SI), X0
+	PAND  mask_ac_coeffs<>(SB), X0
+	MOVOU 16(SI), X1
+	POR   X1, X0
+	MOVOU 32(SI), X1
+	POR   X1, X0
+	MOVOU 48(SI), X1
+	POR   X1, X0
+	MOVOU 64(SI), X1
+	POR   X1, X0
+	MOVOU 80(SI), X1
+	POR   X1, X0
+	MOVOU 96(SI), X1
+	POR   X1, X0
+	MOVOU 112(SI), X1
+	POR   X1, X0
+	MOVOU 128(SI), X1
+	POR   X1, X0
+	MOVOU 144(SI), X1
+	POR   X1, X0
+	MOVOU 160(SI), X1
+	POR   X1, X0
+	MOVOU 176(SI), X1
+	POR   X1, X0
+	MOVOU 192(SI), X1
+	POR   X1, X0
+	MOVOU 208(SI), X1
+	POR   X1, X0
+	MOVOU 224(SI), X1
+	POR   X1, X0
+	MOVOU 240(SI), X1
+	POR   X1, X0
+
+	PTEST X0, X0
+	JZ    sse_dc_only
+
+	IDCT_ROWS(0, 0)
+	IDCT_ROWS(128, 128)
+
+	IDCT_LOADCOLS(0)
+	IDCT_PASS2()
+	MOVOU X0, 0(SP)
+	MOVOU X1, 32(SP)
+	MOVOU X2, 64(SP)
+	MOVOU X3, 96(SP)
+	MOVOU X4, 128(SP)
+	MOVOU X5, 160(SP)
+	MOVOU X6, 192(SP)
+	MOVOU X7, 224(SP)
+
+	IDCT_LOADCOLS(16)
+	IDCT_PASS2()
+
+	IDCT_STORE(0, X0)
+	IDCT_STORE(32, X1)
+	IDCT_STORE(64, X2)
+	IDCT_STORE(96, X3)
+	IDCT_STORE(128, X4)
+	IDCT_STORE(160, X5)
+	IDCT_STORE(192, X6)
+	IDCT_STORE(224, X7)
+
+	RET
+
+sse_dc_only:
+	MOVL (SI), AX
+	SHLL $3, AX
+	ADDL $32, AX
+	SARL $6, AX
+	ADDL $128, AX
+
+	XORL    DX, DX
+	CMPL    AX, DX
+	CMOVLLT DX, AX
+	MOVL    $255, DX
+	CMPL    AX, DX
+	CMOVLGT DX, AX
+
+	MOVL   AX, X0
+	PXOR   X1, X1
+	PSHUFB X1, X0
+
+	MOVQ X0, (DI)
+	ADDQ CX, DI
+	MOVQ X0, (DI)
+	ADDQ CX, DI
+	MOVQ X0, (DI)
+	ADDQ CX, DI
+	MOVQ X0, (DI)
+	ADDQ CX, DI
+	MOVQ X0, (DI)
+	ADDQ CX, DI
+	MOVQ X0, (DI)
+	ADDQ CX, DI
+	MOVQ X0, (DI)
+	ADDQ CX, DI
+	MOVQ X0, (DI)
+
+	RET

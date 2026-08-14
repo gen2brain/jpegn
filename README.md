@@ -6,7 +6,7 @@
 
 No CGo, no dependencies.
 
-SIMD support for amd64 (AVX2), arm64 (NEON) and riscv64 (RVV, with `GORISCV64=rva23u64`).
+SIMD support for amd64 (SSE4.1, AVX2), arm64 (NEON) and riscv64 (RVV, with `GORISCV64=rva23u64`).
 Build with `-tags noasm` for pure Go everywhere.
 
 ### Decoding
@@ -46,7 +46,8 @@ together are ~17% below plain baseline at ~1.6x the encode time.
 
 Against the standard library, ~1.9x on progressive and ~3.1x on baseline decode, ~2.9x decoding
 straight to RGBA, and ~4.5x to ~6.3x on encode, in two allocations rather than twelve. SIMD is
-worth ~1.3x to ~3.7x over `-tags noasm`.
+worth ~1.3x to ~3.7x over `-tags noasm`. On a machine without AVX2 the SSE4.1 kernels still
+give ~1.7x to ~2.8x over pure Go.
 
 ### License
 

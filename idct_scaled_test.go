@@ -10,6 +10,10 @@ import (
 )
 
 func TestScaledDecoding(t *testing.T) {
+	eachTier(t, testScaledDecoding)
+}
+
+func testScaledDecoding(t *testing.T) {
 	testCases := []struct {
 		file     string
 		baseline bool
@@ -134,6 +138,10 @@ func TestScaledDecoding(t *testing.T) {
 // TestScaledVsDownsampled verifies that scaled IDCT produces reasonable results
 // compared to full decode + downsample
 func TestScaledVsDownsampled(t *testing.T) {
+	eachTier(t, testScaledVsDownsampled)
+}
+
+func testScaledVsDownsampled(t *testing.T) {
 	data, err := os.ReadFile("testdata/test.420.jpg")
 	if err != nil {
 		t.Skip("Test file not found")
@@ -229,6 +237,10 @@ func TestScaledVsDownsampled(t *testing.T) {
 
 // TestScaledNativeColorspace verifies scaled decoding works with native colorspaces
 func TestScaledNativeColorspace(t *testing.T) {
+	eachTier(t, testScaledNativeColorspace)
+}
+
+func testScaledNativeColorspace(t *testing.T) {
 	data, err := os.ReadFile("testdata/test.420.jpg")
 	if err != nil {
 		t.Skip("Test file not found")
@@ -404,6 +416,10 @@ func refReduced(blk *[64]int32, n int) []float64 {
 // TestScaledIdctAgainstReference checks each reduced transform against the
 // inverse DCT it stands for, which the end-to-end tests cannot isolate.
 func TestScaledIdctAgainstReference(t *testing.T) {
+	eachTier(t, testScaledIdctAgainstReference)
+}
+
+func testScaledIdctAgainstReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(5))
 
 	cases := []struct {
@@ -462,6 +478,10 @@ func TestScaledIdctAgainstReference(t *testing.T) {
 // TestScaledIdctMatchesScalar checks the assembly 4x4 transform against the
 // pure Go one over the coefficient range the decoder clamps to.
 func TestScaledIdctMatchesScalar(t *testing.T) {
+	eachTier(t, testScaledIdctMatchesScalar)
+}
+
+func testScaledIdctMatchesScalar(t *testing.T) {
 	rng := rand.New(rand.NewSource(9))
 
 	const stride = 13

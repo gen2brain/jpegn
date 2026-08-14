@@ -7,8 +7,10 @@ import "unsafe"
 //go:noescape
 func upsampleNearestNeighborAVX2(src, dst unsafe.Pointer, srcW, srcH, srcS, dstS int)
 
-// upsampleNearestNeighbor uses AVX2 for the common 2x2 case, otherwise falls back to Go.
-// The AVX2 implementation is optimized for source widths that are multiples of 16.
+//go:noescape
+func upsampleNearestNeighborSSE(src, dst unsafe.Pointer, srcW, srcH, srcS, dstS int)
+
+// upsampleNearestNeighbor uses SIMD for the common 2x2 case, otherwise falls back to Go.
 func upsampleNearestNeighbor(c *component, width, height int) {
 	var xShift, yShift uint
 	tempWidth := c.width
@@ -28,9 +30,8 @@ func upsampleNearestNeighbor(c *component, width, height int) {
 		return
 	}
 
-	// Use AVX2 optimized path for the common 2x2 (4:2:0) case.
-	// A minimum width of 16 ensures at least one full XMM register is processed.
-	if isAVX2 && xShift == 1 && yShift == 1 {
+	// Use the SIMD path for the common 2x2 (4:2:0) case.
+	if (hasAVX2 || hasSSE4) && xShift == 1 && yShift == 1 {
 		origPixels := c.pixels
 		origStride := c.stride
 		origWidth := c.width
@@ -49,7 +50,13 @@ func upsampleNearestNeighbor(c *component, width, height int) {
 		c.height = tempHeight
 		c.stride = tempWidth
 
-		upsampleNearestNeighborAVX2(unsafe.Pointer(&origPixels[0]), unsafe.Pointer(&out[0]), origWidth, origHeight, origStride, c.stride)
+		if hasAVX2 {
+			upsampleNearestNeighborAVX2(unsafe.Pointer(&origPixels[0]), unsafe.Pointer(&out[0]), origWidth, origHeight, origStride, c.stride)
+
+			return
+		}
+
+		upsampleNearestNeighborSSE(unsafe.Pointer(&origPixels[0]), unsafe.Pointer(&out[0]), origWidth, origHeight, origStride, c.stride)
 
 		return
 	}
@@ -63,10 +70,15 @@ func upsampleHAVX2(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)
 //go:noescape
 func upsampleVAVX2(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)
 
-// upsampleCatmullRom dispatches to AVX2-optimized horizontal and vertical resampling functions
-// if available, otherwise falls back to the generic Go implementation.
+//go:noescape
+func upsampleHSSE(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)
+
+//go:noescape
+func upsampleVSSE(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)
+
+// upsampleCatmullRom dispatches to the SIMD horizontal and vertical resampling
+// functions if available, otherwise falls back to the generic Go implementation.
 func upsampleCatmullRom(c *component, width, height int) {
-	// The upsampleH and upsampleV functions handle the dispatch logic based on isAVX2 and dimensions.
 	for c.width < width || c.height < height {
 		if c.width < width {
 			upsampleH(c)
@@ -78,43 +90,60 @@ func upsampleCatmullRom(c *component, width, height int) {
 	}
 }
 
+// upsampleHRun doubles the width in place with kernel.
+func upsampleHRun(c *component, kernel func(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)) {
+	newWidth := c.width << 1
+	out := make([]byte, newWidth*c.height)
+
+	kernel(unsafe.Pointer(&out[0]), unsafe.Pointer(&c.pixels[0]), c.width, c.height, newWidth, c.stride)
+
+	c.width = newWidth
+	c.stride = newWidth
+	c.pixels = out
+}
+
+// upsampleVRun doubles the height in place with kernel.
+func upsampleVRun(c *component, kernel func(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)) {
+	newHeight := c.height << 1
+	out := make([]byte, c.width*newHeight)
+
+	kernel(unsafe.Pointer(&out[0]), unsafe.Pointer(&c.pixels[0]), c.width, c.height, c.width, c.stride)
+
+	c.height = newHeight
+	c.stride = c.width
+	c.pixels = out
+}
+
+// upsampleH needs 3 edge pixels plus one full vector block for the main loop to run.
 func upsampleH(c *component) {
-	// A minimum width of 19 (16 iterations + 3 edge pixels) allows the AVX2 main loop to run at least once.
-	// This provides a good balance between optimization and overhead.
-	if isAVX2 && c.width >= 19 {
-		newWidth := c.width << 1
-		out := make([]byte, newWidth*c.height)
+	switch {
+	case hasAVX2 && c.width >= 19:
+		upsampleHRun(c, upsampleHAVX2)
 
-		upsampleHAVX2(unsafe.Pointer(&out[0]), unsafe.Pointer(&c.pixels[0]), c.width, c.height, newWidth, c.stride)
-
-		c.width = newWidth
-		c.stride = newWidth
-		c.pixels = out
+		return
+	case hasSSE4 && c.width >= 11:
+		upsampleHRun(c, upsampleHSSE)
 
 		return
 	}
 
-	// Fallback to Go implementation if AVX2 is not used or width is small.
 	upsampleHScalar(c)
 }
 
+// upsampleV needs one full vector block across and enough rows for the main loop.
 func upsampleV(c *component) {
-	// For the vertical AVX2 optimization, we need sufficient width (>= 16) to leverage SIMD,
-	// and sufficient height (>= 4) for the main loop to run. We use a heuristic of >= 16 for height as well.
-	if isAVX2 && c.width >= 16 && c.height >= 16 {
-		newHeight := c.height << 1
-		out := make([]byte, c.width*newHeight)
+	if c.height >= 16 {
+		switch {
+		case hasAVX2 && c.width >= 16:
+			upsampleVRun(c, upsampleVAVX2)
 
-		// dstStride is the new stride (c.width), srcStride is the original stride.
-		upsampleVAVX2(unsafe.Pointer(&out[0]), unsafe.Pointer(&c.pixels[0]), c.width, c.height, c.width, c.stride)
+			return
+		case hasSSE4 && c.width >= 8:
+			upsampleVRun(c, upsampleVSSE)
 
-		c.height = newHeight
-		c.stride = c.width
-		c.pixels = out
-
-		return
+			return
+		}
 	}
 
-	// Fallback to Go implementation.
 	upsampleVScalar(c)
 }

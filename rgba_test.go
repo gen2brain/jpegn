@@ -54,6 +54,10 @@ func makeRandComponentStride(w, h, stride int) *component {
 
 // TestRGBAStrideHandling verifies the SIMD conversions honor stride != width.
 func TestRGBAStrideHandling(t *testing.T) {
+	eachTier(t, testRGBAStrideHandling)
+}
+
+func testRGBAStrideHandling(t *testing.T) {
 	cases := []struct{ w, h, stride int }{
 		{487, 17, 496}, // luma-like padding, width not a multiple of 16/32
 		{17, 5, 32},
@@ -138,6 +142,10 @@ func setupBenchmarkComponents(b *testing.B, w, h int, ncomp int) ([]*component, 
 
 // TestYCbCrToRGBA verifies the correctness of the YCbCr to RGBA color conversion.
 func TestYCbCrToRGBA(t *testing.T) {
+	eachTier(t, testYCbCrToRGBA)
+}
+
+func testYCbCrToRGBA(t *testing.T) {
 	// These test cases are based on the standard JFIF conversion formulas.
 	// A small tolerance is used to account for rounding differences in integer arithmetic.
 	testCases := []struct {
@@ -180,6 +188,10 @@ func TestYCbCrToRGBA(t *testing.T) {
 
 // TestRGBToRGBA verifies the conversion from separate R, G, B planes to an interleaved RGBA buffer.
 func TestRGBToRGBA(t *testing.T) {
+	eachTier(t, testRGBToRGBA)
+}
+
+func testRGBToRGBA(t *testing.T) {
 	const w, h = 2, 2
 	r := &component{pixels: []byte{255, 10, 20, 30}, stride: w}
 	g := &component{pixels: []byte{0, 40, 50, 60}, stride: w}
@@ -202,6 +214,10 @@ func TestRGBToRGBA(t *testing.T) {
 
 // TestGrayToRGBA verifies the conversion from a single grayscale plane to an RGBA buffer.
 func TestGrayToRGBA(t *testing.T) {
+	eachTier(t, testGrayToRGBA)
+}
+
+func testGrayToRGBA(t *testing.T) {
 	const w, h = 2, 2
 	c := &component{pixels: []byte{0, 100, 128, 255}, stride: w}
 	dst := make([]byte, w*h*4)
@@ -240,6 +256,10 @@ func findFirstDiff(got, want []byte, w int) string {
 // TestAssemblyVsScalarImplementation compares the AVX2 implementation against the pure Go scalar version
 // for various image sizes to ensure correctness, especially with remainder handling.
 func TestAssemblyVsScalarImplementation(t *testing.T) {
+	eachTier(t, testAssemblyVsScalarImplementation)
+}
+
+func testAssemblyVsScalarImplementation(t *testing.T) {
 	testCases := []struct{ w, h int }{
 		{1, 1},
 		{15, 1}, // Less than one 16-pixel chunk
@@ -305,6 +325,10 @@ func TestAssemblyVsScalarImplementation(t *testing.T) {
 
 // BenchmarkYCbCrToRGBA measures the performance of the YCbCr to RGBA conversion.
 func BenchmarkYCbCrToRGBA(b *testing.B) {
+	eachTierB(b, benchmarkYCbCrToRGBA)
+}
+
+func benchmarkYCbCrToRGBA(b *testing.B) {
 	const w, h = 1920, 1080
 	comps, dst := setupBenchmarkComponents(b, w, h, 3)
 	y, cb, cr := comps[0], comps[1], comps[2]
@@ -320,6 +344,10 @@ func BenchmarkYCbCrToRGBA(b *testing.B) {
 
 // BenchmarkRGBToRGBA measures the performance of converting separate RGB planes to RGBA.
 func BenchmarkRGBToRGBA(b *testing.B) {
+	eachTierB(b, benchmarkRGBToRGBA)
+}
+
+func benchmarkRGBToRGBA(b *testing.B) {
 	const w, h = 1920, 1080
 	comps, dst := setupBenchmarkComponents(b, w, h, 3)
 	r, g, blue := comps[0], comps[1], comps[2]
@@ -335,6 +363,10 @@ func BenchmarkRGBToRGBA(b *testing.B) {
 
 // BenchmarkGrayToRGBA measures the performance of converting a grayscale plane to RGBA.
 func BenchmarkGrayToRGBA(b *testing.B) {
+	eachTierB(b, benchmarkGrayToRGBA)
+}
+
+func benchmarkGrayToRGBA(b *testing.B) {
 	const w, h = 1920, 1080
 	comps, dst := setupBenchmarkComponents(b, w, h, 1)
 	c := comps[0]
@@ -352,6 +384,10 @@ func BenchmarkGrayToRGBA(b *testing.B) {
 // The forward direction already has this in rgb_test.go; the inverse is the one
 // that clamps at both rails.
 func TestYCbCrToRGBAExhaustive(t *testing.T) {
+	eachTier(t, testYCbCrToRGBAExhaustive)
+}
+
+func testYCbCrToRGBAExhaustive(t *testing.T) {
 	const n = 256
 
 	mk := func() *component {

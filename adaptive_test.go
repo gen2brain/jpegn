@@ -102,6 +102,10 @@ func aqTestImage(w, h int) *image.Gray {
 // detail masks quantization error, so busy blocks get the wider dead zone and
 // flat ones keep their precision.
 func TestQuantFieldStructure(t *testing.T) {
+	eachTier(t, testQuantFieldStructure)
+}
+
+func testQuantFieldStructure(t *testing.T) {
 	e := &encoder{}
 	if err := e.encode(aqTestImage(256, 64), 75, SubsampleGray, true, false, true, 0); err != nil {
 		t.Fatalf("encode: %v", err)
@@ -384,6 +388,10 @@ func TestBlockModulations(t *testing.T) {
 // TestPreErosionClamped checks the difference limit actually binds: the worst
 // possible edge must land on the clamped value and never above it.
 func TestPreErosionClamped(t *testing.T) {
+	eachTier(t, testPreErosionClamped)
+}
+
+func testPreErosionClamped(t *testing.T) {
 	m := image.NewGray(image.Rect(0, 0, 64, 64))
 	for y := 0; y < 64; y++ {
 		for x := 0; x < 64; x++ {
@@ -597,6 +605,10 @@ func preErosionCases() (row, rowT, rowB []byte) {
 
 // TestPreErosionRowMatchesScalar checks the kernel against the scalar reference.
 func TestPreErosionRowMatchesScalar(t *testing.T) {
+	eachTier(t, testPreErosionRowMatchesScalar)
+}
+
+func testPreErosionRowMatchesScalar(t *testing.T) {
 	check := func(name string, row, rowT, rowB []byte, acc bool) {
 		t.Helper()
 

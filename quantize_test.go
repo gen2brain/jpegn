@@ -22,6 +22,10 @@ func quantTables(qval int) (recip, half [64]int32) {
 
 // TestQuantizeBlockMatchesScalar checks the assembly path against pure Go.
 func TestQuantizeBlockMatchesScalar(t *testing.T) {
+	eachTier(t, testQuantizeBlockMatchesScalar)
+}
+
+func testQuantizeBlockMatchesScalar(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 
 	edges := []int32{0, 1, -1, 7, -7, 1023, -1023, 1024, -1024,
@@ -68,6 +72,10 @@ func TestQuantizeBlockMatchesScalar(t *testing.T) {
 
 // TestQuantizeBlockExhaustive sweeps every coefficient magnitude a block can hold.
 func TestQuantizeBlockExhaustive(t *testing.T) {
+	eachTier(t, testQuantizeBlockExhaustive)
+}
+
+func testQuantizeBlockExhaustive(t *testing.T) {
 	for _, qval := range []int{1, 5, 37, 255} {
 		recip, half := quantTables(qval)
 
@@ -105,6 +113,10 @@ func TestQuantizeReciprocalFitsInt32(t *testing.T) {
 }
 
 func BenchmarkQuantizeBlock(b *testing.B) {
+	eachTierB(b, benchmarkQuantizeBlock)
+}
+
+func benchmarkQuantizeBlock(b *testing.B) {
 	recip, half := quantTables(16)
 
 	var src, dst [64]int32

@@ -216,3 +216,186 @@ TEXT ·fdctAVX2(SB), NOSPLIT, $0-24
 
 	VZEROUPPER
 	RET
+
+// Transpose a 4x4 block of dwords held in A-D, clobbering T0-T3.
+#define TRANSPOSE4(a, b, c, d, t0, t1, t2, t3) \
+	MOVOU      a, t0;   \
+	PUNPCKLLQ  b, t0;   \
+	MOVOU      c, t1;   \
+	PUNPCKLLQ  d, t1;   \
+	MOVOU      a, t2;   \
+	PUNPCKHLQ  b, t2;   \
+	MOVOU      c, t3;   \
+	PUNPCKHLQ  d, t3;   \
+	MOVOU      t0, a;   \
+	PUNPCKLQDQ t1, a;   \
+	MOVOU      t0, b;   \
+	PUNPCKHQDQ t1, b;   \
+	MOVOU      t2, c;   \
+	PUNPCKLQDQ t3, c;   \
+	MOVOU      t2, d;   \
+	PUNPCKHQDQ t3, d
+
+// Butterfly X0-X7 into t10 (X12), t11 (X13) and the coefficient pairs
+// p45 (X10), p67 (X11) and p1213 (X14). Clobbers X8, X9.
+#define FDCT_BUTTERFLY() \
+	MOVOU   X0, X8;         \
+	PADDL   X7, X8;         \
+	PSUBL   X7, X0;         \
+	MOVOU   X1, X9;         \
+	PADDL   X6, X9;         \
+	PSUBL   X6, X1;         \
+	MOVOU   X2, X10;        \
+	PADDL   X5, X10;        \
+	PSUBL   X5, X2;         \
+	MOVOU   X3, X11;        \
+	PADDL   X4, X11;        \
+	PSUBL   X4, X3;         \
+	MOVOU   X8, X12;        \
+	PADDL   X11, X12;       \
+	PSUBL   X11, X8;        \
+	MOVOU   X9, X13;        \
+	PADDL   X10, X13;       \
+	PSUBL   X10, X9;        \
+	MOVOU   X2, X10;        \
+	PSLLL   $16, X10;       \
+	PBLENDW $0x55, X3, X10; \
+	MOVOU   X0, X11;        \
+	PSLLL   $16, X11;       \
+	PBLENDW $0x55, X1, X11; \
+	MOVOU   X8, X14;        \
+	PSLLL   $16, X14;       \
+	PBLENDW $0x55, X9, X14
+
+// Rotate the packed pairs into the odd and non-DC even outputs. Clobbers X13.
+#define FDCT_ODD(rnd, sh) \
+	MOVOU   X14, X2;                 \
+	PMADDWL fp2_1213<>(SB), X2;      \
+	PADDL   rnd, X2;                 \
+	PSRAL   sh, X2;                  \
+	MOVOU   X14, X6;                 \
+	PMADDWL fp6_1213<>(SB), X6;      \
+	PADDL   rnd, X6;                 \
+	PSRAL   sh, X6;                  \
+	MOVOU   X10, X1;                 \
+	PMADDWL fp1_45<>(SB), X1;        \
+	MOVOU   X11, X13;                \
+	PMADDWL fp1_67<>(SB), X13;       \
+	PADDL   X13, X1;                 \
+	PADDL   rnd, X1;                 \
+	PSRAL   sh, X1;                  \
+	MOVOU   X10, X3;                 \
+	PMADDWL fp3_45<>(SB), X3;        \
+	MOVOU   X11, X13;                \
+	PMADDWL fp3_67<>(SB), X13;       \
+	PADDL   X13, X3;                 \
+	PADDL   rnd, X3;                 \
+	PSRAL   sh, X3;                  \
+	MOVOU   X10, X5;                 \
+	PMADDWL fp5_45<>(SB), X5;        \
+	MOVOU   X11, X13;                \
+	PMADDWL fp5_67<>(SB), X13;       \
+	PADDL   X13, X5;                 \
+	PADDL   rnd, X5;                 \
+	PSRAL   sh, X5;                  \
+	MOVOU   X10, X7;                 \
+	PMADDWL fp7_45<>(SB), X7;        \
+	MOVOU   X11, X13;                \
+	PMADDWL fp7_67<>(SB), X13;       \
+	PADDL   X13, X7;                 \
+	PADDL   rnd, X7;                 \
+	PSRAL   sh, X7
+
+// Load four rows at DI into X0-X3 (columns 0-3) and X4-X7 (columns 4-7).
+#define FDCT_LOAD4() \
+	PMOVZXBD 0(DI), X0;         \
+	PSUBL    fc128<>(SB), X0;   \
+	PMOVZXBD 4(DI), X4;         \
+	PSUBL    fc128<>(SB), X4;   \
+	ADDQ     CX, DI;            \
+	PMOVZXBD 0(DI), X1;         \
+	PSUBL    fc128<>(SB), X1;   \
+	PMOVZXBD 4(DI), X5;         \
+	PSUBL    fc128<>(SB), X5;   \
+	ADDQ     CX, DI;            \
+	PMOVZXBD 0(DI), X2;         \
+	PSUBL    fc128<>(SB), X2;   \
+	PMOVZXBD 4(DI), X6;         \
+	PSUBL    fc128<>(SB), X6;   \
+	ADDQ     CX, DI;            \
+	PMOVZXBD 0(DI), X3;         \
+	PSUBL    fc128<>(SB), X3;   \
+	PMOVZXBD 4(DI), X7;         \
+	PSUBL    fc128<>(SB), X7;   \
+	ADDQ     CX, DI;            \
+	TRANSPOSE4(X0, X1, X2, X3, X8, X9, X10, X11); \
+	TRANSPOSE4(X4, X5, X6, X7, X8, X9, X10, X11)
+
+// Row pass over the four rows held in X0-X7, storing row-major at OFF(SI).
+#define FDCT_ROWS(off) \
+	FDCT_BUTTERFLY();                             \
+	MOVOU X12, X0;                                \
+	PADDL X13, X0;                                \
+	PSLLL $2, X0;                                 \
+	MOVOU X12, X4;                                \
+	PSUBL X13, X4;                                \
+	PSLLL $2, X4;                                 \
+	MOVOU fcr1024<>(SB), X15;                     \
+	FDCT_ODD(X15, $11);                           \
+	TRANSPOSE4(X0, X1, X2, X3, X8, X9, X10, X11); \
+	TRANSPOSE4(X4, X5, X6, X7, X8, X9, X10, X11); \
+	MOVOU X0, (off+0)(SI);                        \
+	MOVOU X4, (off+16)(SI);                       \
+	MOVOU X1, (off+32)(SI);                       \
+	MOVOU X5, (off+48)(SI);                       \
+	MOVOU X2, (off+64)(SI);                       \
+	MOVOU X6, (off+80)(SI);                       \
+	MOVOU X3, (off+96)(SI);                       \
+	MOVOU X7, (off+112)(SI)
+
+// Column pass over the four columns at OFF(SI), stored back in place.
+#define FDCT_COLS(off) \
+	MOVOU (off+0)(SI), X0;      \
+	MOVOU (off+32)(SI), X1;     \
+	MOVOU (off+64)(SI), X2;     \
+	MOVOU (off+96)(SI), X3;     \
+	MOVOU (off+128)(SI), X4;    \
+	MOVOU (off+160)(SI), X5;    \
+	MOVOU (off+192)(SI), X6;    \
+	MOVOU (off+224)(SI), X7;    \
+	FDCT_BUTTERFLY();           \
+	MOVOU X12, X0;              \
+	PADDL X13, X0;              \
+	PADDL fcr2<>(SB), X0;       \
+	PSRAL $2, X0;               \
+	MOVOU X12, X4;              \
+	PSUBL X13, X4;              \
+	PADDL fcr2<>(SB), X4;       \
+	PSRAL $2, X4;               \
+	MOVOU fcr16384<>(SB), X15;  \
+	FDCT_ODD(X15, $15);         \
+	MOVOU X0, (off+0)(SI);      \
+	MOVOU X1, (off+32)(SI);     \
+	MOVOU X2, (off+64)(SI);     \
+	MOVOU X3, (off+96)(SI);     \
+	MOVOU X4, (off+128)(SI);    \
+	MOVOU X5, (off+160)(SI);    \
+	MOVOU X6, (off+192)(SI);    \
+	MOVOU X7, (off+224)(SI)
+
+// func fdctSSE(blk *[64]int32, src *byte, stride int)
+TEXT ·fdctSSE(SB), NOSPLIT, $0-24
+	MOVQ blk+0(FP), SI
+	MOVQ src+8(FP), DI
+	MOVQ stride+16(FP), CX
+
+	FDCT_LOAD4()
+	FDCT_ROWS(0)
+
+	FDCT_LOAD4()
+	FDCT_ROWS(128)
+
+	FDCT_COLS(0)
+	FDCT_COLS(16)
+
+	RET

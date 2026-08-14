@@ -121,3 +121,74 @@ loop:
 done:
 	VZEROUPPER
 	RET
+
+// Convert the four pixels in SRC into dwords YO, CBO and CRO. SRC is clobbered.
+#define CONVERT4(SRC, YO, CBO, CRO, T0, T1, T2, T3) \
+	MOVOU SRC, T0;            \
+	MOVOU SRC, T1;            \
+	MOVOU SRC, T2;            \
+	MOVOU SRC, T3;            \
+	PSHUFB mrg<>(SB), T0;     \
+	PSHUFB mbg<>(SB), T1;     \
+	PSHUFB mr<>(SB), T2;      \
+	PSHUFB mb<>(SB), T3;      \
+	MOVOU T0, YO;             \
+	MOVOU T1, SRC;            \
+	PMADDWL cyrg<>(SB), YO;   \
+	PMADDWL cybg<>(SB), SRC;  \
+	PADDL SRC, YO;            \
+	PADDL rndy<>(SB), YO;     \
+	PSRAL $16, YO;            \
+	MOVOU T0, CBO;            \
+	PMADDWL cbrg<>(SB), CBO;  \
+	PSLLL $15, T3;            \
+	PADDL T3, CBO;            \
+	PADDL rndc<>(SB), CBO;    \
+	PSRAL $16, CBO;           \
+	MOVOU T1, CRO;            \
+	PMADDWL crbg<>(SB), CRO;  \
+	PSLLL $15, T2;            \
+	PADDL T2, CRO;            \
+	PADDL rndc<>(SB), CRO;    \
+	PSRAL $16, CRO
+
+// Pack two dword vectors into eight saturated bytes in the low half of DST.
+#define PACK8(LO, HI, DST) \
+	MOVOU LO, DST;         \
+	PACKSSLW HI, DST;      \
+	PACKUSWB DST, DST
+
+// func rgbToYCbCrSSE(dstY, dstCb, dstCr, src []byte, n int)
+TEXT ·rgbToYCbCrSSE(SB), NOSPLIT, $0-104
+	MOVQ dstY_base+0(FP), DI
+	MOVQ dstCb_base+24(FP), SI
+	MOVQ dstCr_base+48(FP), DX
+	MOVQ src_base+72(FP), BX
+	MOVQ n+96(FP), CX
+
+sse_loop:
+	CMPQ CX, $8
+	JL   sse_done
+
+	MOVOU 0(BX), X0
+	MOVOU 16(BX), X8
+
+	CONVERT4(X0, X5, X6, X7, X1, X2, X3, X4)
+	CONVERT4(X8, X9, X10, X11, X1, X2, X3, X4)
+
+	PACK8(X5, X9, X12)
+	MOVQ X12, 0(DI)
+	PACK8(X6, X10, X12)
+	MOVQ X12, 0(SI)
+	PACK8(X7, X11, X12)
+	MOVQ X12, 0(DX)
+
+	ADDQ $32, BX
+	ADDQ $8, DI
+	ADDQ $8, SI
+	ADDQ $8, DX
+	SUBQ $8, CX
+	JMP  sse_loop
+
+sse_done:
+	RET

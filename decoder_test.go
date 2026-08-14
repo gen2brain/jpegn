@@ -241,6 +241,10 @@ func TestDecode2x2(t *testing.T) {
 // TestDecodeOddDimensions tests decoding of a JPEG with odd (non-MCU-aligned) dimensions.
 // The image is 487x511 pixels with 4:2:0 subsampling, which requires proper padding handling.
 func TestDecodeOddDimensions(t *testing.T) {
+	eachTier(t, testDecodeOddDimensions)
+}
+
+func testDecodeOddDimensions(t *testing.T) {
 	img, err := Decode(bytes.NewReader(test420odd))
 	if err != nil {
 		t.Fatalf("Decode failed for odd-sized image: %v", err)
@@ -323,6 +327,10 @@ func TestDecodeTruncatedMarkers(t *testing.T) {
 // TestDecodeProgressiveOddDimensions guards against luma desync in non-interleaved
 // progressive scans of non-MCU-aligned 4:2:0 images (true blocks/line < nBlocksX).
 func TestDecodeProgressiveOddDimensions(t *testing.T) {
+	eachTier(t, testDecodeProgressiveOddDimensions)
+}
+
+func testDecodeProgressiveOddDimensions(t *testing.T) {
 	img, err := Decode(bytes.NewReader(test420progOdd))
 	if err != nil {
 		t.Fatalf("Decode failed: %v", err)
@@ -436,6 +444,10 @@ func TestDecode1x1(t *testing.T) {
 
 // TestDecodeSubsampling tests decoding of baseline JPEGs with different subsampling ratios.
 func TestDecodeSubsampling(t *testing.T) {
+	eachTier(t, testDecodeSubsampling)
+}
+
+func testDecodeSubsampling(t *testing.T) {
 	var testFiles = map[string][]byte{
 		"4:2:0": test420,
 		"4:2:2": test422,
@@ -509,6 +521,10 @@ func TestDecodeSubsampling(t *testing.T) {
 // TestDecodeSubsamplingRGBANearestNeighbor tests decoding of baseline JPEGs with different subsampling ratios,
 // verifying the RGBA conversion with NearestNeighbor upsampling.
 func TestDecodeSubsamplingRGBANearestNeighbor(t *testing.T) {
+	eachTier(t, testDecodeSubsamplingRGBANearestNeighbor)
+}
+
+func testDecodeSubsamplingRGBANearestNeighbor(t *testing.T) {
 	var testFiles = map[string][]byte{
 		"4:2:0": test420,
 		"4:2:2": test422,
@@ -560,6 +576,10 @@ func TestDecodeSubsamplingRGBANearestNeighbor(t *testing.T) {
 // TestDecodeSubsamplingRGBACatmullRom tests decoding of baseline JPEGs with different subsampling ratios,
 // verifying the RGBA conversion with CatmullRom upsampling.
 func TestDecodeSubsamplingRGBACatmullRom(t *testing.T) {
+	eachTier(t, testDecodeSubsamplingRGBACatmullRom)
+}
+
+func testDecodeSubsamplingRGBACatmullRom(t *testing.T) {
 	var testFiles = map[string][]byte{
 		"4:2:0": test420,
 		"4:2:2": test422,
@@ -615,6 +635,10 @@ func TestDecodeSubsamplingRGBACatmullRom(t *testing.T) {
 
 // TestDecodeGray tests decoding of a baseline grayscale JPEG.
 func TestDecodeGray(t *testing.T) {
+	eachTier(t, testDecodeGray)
+}
+
+func testDecodeGray(t *testing.T) {
 	refImg, err := jpeg.Decode(bytes.NewReader(testGRAY))
 	if err != nil {
 		t.Fatalf("std jpeg.Decode failed for grayscale image: %v", err)
@@ -654,6 +678,10 @@ func TestDecodeGray(t *testing.T) {
 
 // TestDecodeRGB tests decoding of a baseline RGB JPEG.
 func TestDecodeRGB(t *testing.T) {
+	eachTier(t, testDecodeRGB)
+}
+
+func testDecodeRGB(t *testing.T) {
 	refImg, err := jpeg.Decode(bytes.NewReader(testRGB))
 	if err != nil {
 		t.Fatalf("std jpeg.Decode failed for RGB image: %v", err)
@@ -694,6 +722,10 @@ func TestDecodeRGB(t *testing.T) {
 // TestDecodeCMYK verifies that the decoder correctly handles CMYK JPEG images
 // by natively decoding them to image.CMYK format.
 func TestDecodeCMYK(t *testing.T) {
+	eachTier(t, testDecodeCMYK)
+}
+
+func testDecodeCMYK(t *testing.T) {
 	img, err := Decode(bytes.NewReader(testCMYK))
 	if err != nil {
 		t.Fatalf("Decode failed for CMYK JPEG: %v", err)
@@ -736,6 +768,10 @@ func TestDecodeCMYK(t *testing.T) {
 // TestDecodeYCCK verifies that the decoder correctly handles YCbCrK (YCCK) JPEG images
 // by natively decoding them to image.CMYK format.
 func TestDecodeYCCK(t *testing.T) {
+	eachTier(t, testDecodeYCCK)
+}
+
+func testDecodeYCCK(t *testing.T) {
 	img, err := Decode(bytes.NewReader(testYCCK))
 	if err != nil {
 		t.Fatalf("Decode failed for YCCK JPEG: %v", err)
@@ -846,6 +882,10 @@ func TestDecodeAutoRotate(t *testing.T) {
 
 // BenchmarkDecodeBaseline420 measures the performance of decoder.
 func BenchmarkDecodeBaseline420(b *testing.B) {
+	eachTierB(b, benchmarkDecodeBaseline420)
+}
+
+func benchmarkDecodeBaseline420(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
@@ -961,6 +1001,10 @@ func BenchmarkDecodeConfigStdLib(b *testing.B) {
 
 // BenchmarkDecodeToRGBANearestNeighbor measures the performance of decoding to RGBA with NearestNeighbor upsampling.
 func BenchmarkDecodeToRGBANearestNeighbor(b *testing.B) {
+	eachTierB(b, benchmarkDecodeToRGBANearestNeighbor)
+}
+
+func benchmarkDecodeToRGBANearestNeighbor(b *testing.B) {
 	opts := &Options{ToRGBA: true, UpsampleMethod: NearestNeighbor}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -976,6 +1020,10 @@ func BenchmarkDecodeToRGBANearestNeighbor(b *testing.B) {
 
 // BenchmarkDecodeToRGBACatmullRom measures the performance of decoding to RGBA with CatmullRom upsampling.
 func BenchmarkDecodeToRGBACatmullRom(b *testing.B) {
+	eachTierB(b, benchmarkDecodeToRGBACatmullRom)
+}
+
+func benchmarkDecodeToRGBACatmullRom(b *testing.B) {
 	opts := &Options{ToRGBA: true, UpsampleMethod: CatmullRom}
 	b.ReportAllocs()
 	b.ResetTimer()

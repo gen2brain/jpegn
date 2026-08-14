@@ -118,6 +118,10 @@ func printBlock(t *testing.T, block []byte) {
 // TestIdctDC verifies the IDCT implementation for the DC-only case.
 // This tests the optimization path in both rowIDCT and colIDCT.
 func TestIdctDC(t *testing.T) {
+	eachTier(t, testIdctDC)
+}
+
+func testIdctDC(t *testing.T) {
 	block := idctTestBlock
 	pixels := idctHelper(&block)
 
@@ -136,6 +140,10 @@ func TestIdctDC(t *testing.T) {
 // TestIdctAC verifies the IDCT implementation for a general case with AC coefficients.
 // This tests the main logic of the AAN fast IDCT algorithm.
 func TestIdctAC(t *testing.T) {
+	eachTier(t, testIdctAC)
+}
+
+func testIdctAC(t *testing.T) {
 	block := idctTestBlockAC
 	pixels := idctHelper(&block)
 
@@ -153,6 +161,10 @@ func TestIdctAC(t *testing.T) {
 
 // TestIdctACStrided verifies the IDCT implementation for a case with a non-8 stride.
 func TestIdctACStrided(t *testing.T) {
+	eachTier(t, testIdctACStrided)
+}
+
+func testIdctACStrided(t *testing.T) {
 	const stride = 16
 	block := idctTestBlockAC
 	// The output buffer must be large enough for 8 rows with the given stride.
@@ -190,6 +202,10 @@ func TestIdctACStrided(t *testing.T) {
 
 // TestIdctFullBlock verifies the IDCT implementation for a block with many non-zero AC coefficients.
 func TestIdctFullBlock(t *testing.T) {
+	eachTier(t, testIdctFullBlock)
+}
+
+func testIdctFullBlock(t *testing.T) {
 	block := idctTestBlockFull
 	pixels := idctHelper(&block)
 
@@ -209,6 +225,10 @@ func TestIdctFullBlock(t *testing.T) {
 // A DC coefficient of 2047 should result in values > 255 before clipping.
 // (2047 / 8) + 128 = 255.875 + 128 = 383.875, which must be clamped to 255.
 func TestIdctSaturationUpper(t *testing.T) {
+	eachTier(t, testIdctSaturationUpper)
+}
+
+func testIdctSaturationUpper(t *testing.T) {
 	var block [64]int32
 	block[0] = 2047 // Max positive DC value for baseline JPEG
 	pixels := idctHelper(&block)
@@ -226,6 +246,10 @@ func TestIdctSaturationUpper(t *testing.T) {
 // A DC coefficient of -2047 should result in values < 0 before clipping.
 // (-2047 / 8) + 128 = -255.875 + 128 = -127.875, which must be clamped to 0.
 func TestIdctSaturationLower(t *testing.T) {
+	eachTier(t, testIdctSaturationLower)
+}
+
+func testIdctSaturationLower(t *testing.T) {
 	var block [64]int32
 	block[0] = -2047
 	pixels := idctHelper(&block)
@@ -241,6 +265,10 @@ func TestIdctSaturationLower(t *testing.T) {
 
 // BenchmarkIdct measures the performance of the full 8x8 IDCT process.
 func BenchmarkIdct(b *testing.B) {
+	eachTierB(b, benchmarkIdct)
+}
+
+func benchmarkIdct(b *testing.B) {
 	// Use the AC test block as a representative input.
 	block := idctTestBlockAC
 	var out [64]byte
@@ -257,6 +285,10 @@ func BenchmarkIdct(b *testing.B) {
 // TestIdctMatchesScalar checks the assembly IDCT against the pure Go one up to
 // dequantLimit, the magnitude the decoder clamps coefficients to.
 func TestIdctMatchesScalar(t *testing.T) {
+	eachTier(t, testIdctMatchesScalar)
+}
+
+func testIdctMatchesScalar(t *testing.T) {
 	rng := rand.New(rand.NewSource(17))
 
 	limits := []int32{4, 255, 2047, 8192}

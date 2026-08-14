@@ -2,10 +2,11 @@
 
 package jpegn
 
-var isAVX2 bool
+var (
+	hasAVX2 = cpuidAVX2()
+	hasSSE4 = cpuidSSE41()
+)
 
-func init() {
-	isAVX2 = hasAVX2()
-}
+func cpuidAVX2() bool
 
-func hasAVX2() bool
+func cpuidSSE41() bool

@@ -75,3 +75,68 @@ loop:
 
 	VZEROUPPER
 	RET
+
+// func quantizeSSE(dst, src, recip, half *[64]int32) uint64
+TEXT ·quantizeSSE(SB), NOSPLIT, $0-40
+	MOVQ dst+0(FP), DI
+	MOVQ src+8(FP), SI
+	MOVQ recip+16(FP), DX
+	MOVQ half+24(FP), BX
+
+	MOVOU qmax<>(SB), X7
+	PXOR  X8, X8
+	XORQ  R8, R8
+	XORQ  R9, R9
+	MOVQ  $16, R11
+
+sse_loop:
+	MOVOU (SI), X0
+	MOVOU (BX), X10
+	MOVOU (DX), X3
+
+	MOVOU X0, X1
+	PSRAL $31, X1
+	PABSD X0, X2
+	PADDL X10, X2
+
+	MOVOU  X2, X4
+	PMULDQ X3, X4
+
+	MOVOU  X2, X5
+	MOVOU  X3, X6
+	PSRLQ  $32, X5
+	PSRLQ  $32, X6
+	PMULDQ X6, X5
+
+	PSRLQ   $31, X4
+	PSRLQ   $31, X5
+	PSLLQ   $32, X5
+	PBLENDW $0xCC, X5, X4
+
+	PMINSD X7, X4
+	PXOR   X1, X4
+	PSUBL  X1, X4
+
+	MOVOU X4, (DI)
+
+	// Record which lanes are non-zero.
+	MOVOU    X4, X9
+	PCMPEQL  X8, X9
+	MOVMSKPS X9, AX
+	NOTL     AX
+	ANDL     $0xF, AX
+	MOVQ     AX, R10
+	MOVQ     R9, CX
+	SHLQ     CL, R10
+	ORQ      R10, R8
+	ADDQ     $4, R9
+
+	ADDQ $16, SI
+	ADDQ $16, DX
+	ADDQ $16, BX
+	ADDQ $16, DI
+	DECQ R11
+	JNZ  sse_loop
+
+	MOVQ R8, ret+32(FP)
+	RET

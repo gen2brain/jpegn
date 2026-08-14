@@ -55,3 +55,39 @@ loop:
 
 done:
 	RET
+
+// func downsampleRow2x2SSE(dst, src0, src1 *byte, n int)
+TEXT ·downsampleRow2x2SSE(SB), NOSPLIT, $0-32
+	MOVQ dst+0(FP), DI
+	MOVQ src0+8(FP), SI
+	MOVQ src1+16(FP), DX
+	MOVQ n+24(FP), CX
+
+	SHRQ $3, CX
+	JZ   sse_done
+
+	MOVOU dsone<>(SB), X2
+	MOVOU dstwo<>(SB), X3
+
+sse_loop:
+	MOVOU (SI), X0
+	MOVOU (DX), X1
+
+	PMADDUBSW X2, X0
+	PMADDUBSW X2, X1
+
+	PADDW X1, X0
+	PADDW X3, X0
+	PSRLW $2, X0
+
+	PACKUSWB X0, X0
+	MOVQ     X0, (DI)
+
+	ADDQ $16, SI
+	ADDQ $16, DX
+	ADDQ $8, DI
+	DECQ CX
+	JNZ  sse_loop
+
+sse_done:
+	RET

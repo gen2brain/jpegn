@@ -7,6 +7,10 @@ import (
 
 // TestRGBToYCbCrRowMatchesScalar checks the row kernel against the reference.
 func TestRGBToYCbCrRowMatchesScalar(t *testing.T) {
+	eachTier(t, testRGBToYCbCrRowMatchesScalar)
+}
+
+func testRGBToYCbCrRowMatchesScalar(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 
 	for _, n := range []int{0, 1, 2, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 255, 256} {
@@ -43,6 +47,10 @@ func TestRGBToYCbCrRowMatchesScalar(t *testing.T) {
 
 // TestRGBToYCbCrExhaustive checks every RGB triple through the row kernel.
 func TestRGBToYCbCrExhaustive(t *testing.T) {
+	eachTier(t, testRGBToYCbCrExhaustive)
+}
+
+func testRGBToYCbCrExhaustive(t *testing.T) {
 	const n = 256
 
 	src := make([]byte, n*4)
@@ -72,6 +80,10 @@ func TestRGBToYCbCrExhaustive(t *testing.T) {
 }
 
 func BenchmarkRGBToYCbCrRow(b *testing.B) {
+	eachTierB(b, benchmarkRGBToYCbCrRow)
+}
+
+func benchmarkRGBToYCbCrRow(b *testing.B) {
 	const n = 1024
 
 	src := make([]byte, n*4)

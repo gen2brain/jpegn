@@ -2,9 +2,9 @@
 
 #include "textflag.h"
 
-// hasAVX2 returns true if the CPU supports AVX2 instructions and the OS enables their use.
+// cpuidAVX2 returns true if the CPU supports AVX2 instructions and the OS enables their use.
 // This function uses CPUID to check hardware support and XGETBV to check OS support.
-TEXT ·hasAVX2(SB), NOSPLIT, $0-1
+TEXT ·cpuidAVX2(SB), NOSPLIT, $0-1
 	// First, check if CPUID supports function 7 (maxID >= 7).
 	// CPUID with EAX=0 returns the maximum function number in EAX.
 	MOVL $0, AX     // Set EAX to 0 for maximum function query.
@@ -44,4 +44,21 @@ TEXT ·hasAVX2(SB), NOSPLIT, $0-1
 no_support:
 	// Return false if any check fails.
 	MOVB $0, ret+0(FP) // Set return value to 0 (false).
+	RET
+
+// cpuidSSE41 returns true if the CPU supports both SSSE3 and SSE4.1, which is
+// the GOAMD64=v2 baseline. No XGETBV, the state is legacy SSE the OS always saves.
+TEXT ·cpuidSSE41(SB), NOSPLIT, $0-1
+	MOVL $1, AX             // Set EAX to 1 for basic feature info.
+	MOVL $0, CX             // Set ECX to 0 (subleaf).
+	CPUID                   // Execute CPUID.
+	ANDL $0x00080200, CX    // Mask bit 9 (SSSE3) and bit 19 (SSE4.1).
+	CMPL CX, $0x00080200    // Both must be set.
+	JNE  no_sse
+
+	MOVB $1, ret+0(FP)
+	RET
+
+no_sse:
+	MOVB $0, ret+0(FP)
 	RET

@@ -5,12 +5,20 @@ package jpegn
 //go:noescape
 func idct4x4AVX2(blk *[64]int32, out *byte, stride int)
 
+//go:noescape
+func idct4x4SSE(blk *[64]int32, out *byte, stride int)
+
 // idctScaled dispatches on the scale denominator, which must be 1, 2, 4 or 8.
 func idctScaled(blk *[64]int32, out []byte, outOffset int, stride int, scaleDenom int) {
 	switch scaleDenom {
 	case 2:
-		if isAVX2 {
+		switch {
+		case hasAVX2:
 			idct4x4AVX2(blk, &out[outOffset], stride)
+
+			return
+		case hasSSE4:
+			idct4x4SSE(blk, &out[outOffset], stride)
 
 			return
 		}
