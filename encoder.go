@@ -536,6 +536,29 @@ func (e *encoder) emitBits(code uint32, nbits uint8) {
 	e.out = append(e.out, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
 }
 
+// emitPair appends a Huffman symbol and its value bits in one accumulator step.
+// Both sizes together never exceed 32, the room the accumulator always has.
+func (e *encoder) emitPair(code uint32, nbits uint8, val uint32, vbits uint8) {
+	n := nbits + vbits
+	e.acc = e.acc<<n | uint64(code)<<vbits | uint64(val)
+	e.nacc += uint(n)
+
+	if e.nacc < 32 {
+		return
+	}
+
+	e.nacc -= 32
+	v := uint32(e.acc >> e.nacc)
+
+	if (^v-0x01010101)&v&0x80808080 != 0 {
+		e.stuff(v)
+
+		return
+	}
+
+	e.out = append(e.out, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
+}
+
 // stuff writes four bytes that contain at least one 0xFF.
 func (e *encoder) stuff(v uint32) {
 	for s := 24; s >= 0; s -= 8 {
@@ -585,10 +608,14 @@ func magnitude(v int32) (uint8, uint32) {
 	a := v
 	if a < 0 {
 		a = -a
-		v += 1<<uint(bits.Len32(uint32(a))) - 1
 	}
 
-	return uint8(bits.Len32(uint32(a))), uint32(v)
+	n := bits.Len32(uint32(a))
+	if v < 0 {
+		v += 1<<uint(n) - 1
+	}
+
+	return uint8(n), uint32(v)
 }
 
 // scan walks the MCUs, gathering statistics or emitting coded data.
@@ -664,11 +691,7 @@ func (e *encoder) encodeCoeffs(zb *[64]int32, c *encComponent, nz uint64) {
 		e.dcFreq[c.dcSel][s]++
 	} else {
 		t := &e.dcTab[c.dcSel]
-		e.emitBits(t.code[s], t.size[s])
-
-		if s > 0 {
-			e.emitBits(b, s)
-		}
+		e.emitPair(t.code[s], t.size[s], b, s)
 	}
 
 	af := &e.acFreq[c.acSel]
@@ -703,8 +726,7 @@ func (e *encoder) encodeCoeffs(zb *[64]int32, c *encComponent, nz uint64) {
 		if e.gather {
 			af[sym]++
 		} else {
-			e.emitBits(t.code[sym], t.size[sym])
-			e.emitBits(b, s)
+			e.emitPair(t.code[sym], t.size[sym], b, s)
 		}
 
 		prev = k
