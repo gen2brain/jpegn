@@ -3,6 +3,7 @@ package jpegn
 import (
 	"bytes"
 	"fmt"
+	"math/rand"
 	"testing"
 )
 
@@ -250,5 +251,35 @@ func BenchmarkIdct(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		currentBlock := block // Clone
 		idct(&currentBlock, out[:], 0, 8)
+	}
+}
+
+// TestIdctMatchesScalar checks the assembly IDCT against the pure Go one up to
+// dequantLimit, the magnitude the decoder clamps coefficients to.
+func TestIdctMatchesScalar(t *testing.T) {
+	rng := rand.New(rand.NewSource(17))
+
+	limits := []int32{4, 255, 2047, 8192}
+
+	for _, lim := range limits {
+		for n := 0; n < 2000; n++ {
+			var blk [64]int32
+			for i := range blk {
+				blk[i] = rng.Int31n(lim)*2 - lim
+			}
+
+			want := make([]byte, 64)
+			got := make([]byte, 64)
+
+			ref := blk
+			idctIterative(&ref, want, 0, 8)
+			idct(&blk, got, 0, 8)
+
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("limit %d case %d: pixel %d got %d, want %d", lim, n, i, got[i], want[i])
+				}
+			}
+		}
 	}
 }

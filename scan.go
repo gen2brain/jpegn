@@ -41,6 +41,24 @@ func (d *decoder) getHuffSymbol(t *huffTable) int {
 	return int(huffCode)
 }
 
+// dequantLimit caps a dequantized coefficient; valid 8-bit images stay under 1024.
+const dequantLimit = 1 << 13
+
+// dequant scales a coefficient by its quantization factor, saturating.
+func dequant(v int, q uint16) int32 {
+	p := int64(v) * int64(q)
+
+	if p > dequantLimit {
+		return dequantLimit
+	}
+
+	if p < -dequantLimit {
+		return -dequantLimit
+	}
+
+	return int32(p)
+}
+
 // decodeBlock decodes a single 8x8 block of a component (Baseline).
 // This involves entropy decoding of DC and AC coefficients, dequantization, and applying the IDCT.
 func (d *decoder) decodeBlock(c *component, outOffset int) {
@@ -62,7 +80,7 @@ func (d *decoder) decodeBlock(c *component, outOffset int) {
 	// If they do, we might proceed with potentially corrupted data if d.markerHit isn't checked here.
 
 	c.dcPred += value
-	d.block[0] = int32(c.dcPred) * int32(qt[0])
+	d.block[0] = dequant(c.dcPred, qt[0])
 
 	// Decode AC coefficients.
 	coef := 1 // coef is the zigzag index.
@@ -91,7 +109,7 @@ func (d *decoder) decodeBlock(c *component, outOffset int) {
 		naturalIndex := zz[coef]
 
 		// Dequantize using the natural index.
-		d.block[naturalIndex] = int32(value) * int32(qt[naturalIndex])
+		d.block[naturalIndex] = dequant(value, qt[naturalIndex])
 
 		coef++
 	}
@@ -402,8 +420,7 @@ func (d *decoder) decodeScanBaseline(nCompScan int, scanComp [4]int) error {
 	var decodeUnit func(i int)
 
 	if nCompScan == 1 {
-		// Non-interleaved: the component's own block raster, without the MCU
-		// padding, addressed through the padded stride.
+		// The component's own block raster, addressed through the padded stride.
 		c := &d.comp[scanComp[0]]
 		total = c.blocksPerLine * c.blocksPerCol
 
@@ -882,7 +899,7 @@ func (d *decoder) postProcessProgressive() error {
 				// Branchless dequant; writing all 64 also zero-fills, no clear needed.
 				coefs := c.coeffs[coeffOffset : coeffOffset+64]
 				for k := 0; k < 64; k++ {
-					d.block[k] = coefs[k] * int32(qt[k])
+					d.block[k] = dequant(int(coefs[k]), qt[k])
 				}
 
 				// Apply IDCT to pixel buffer

@@ -2,12 +2,19 @@ package jpegn
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
+	"flag"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/jpeg"
 	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -1148,10 +1155,8 @@ func TestDecode16BitDQT(t *testing.T) {
 	}
 }
 
-// TestDecodeNonInterleaved decodes a baseline image whose three components each
-// occupy their own scan, and checks it against the interleaved encoding of the
-// same source. The 69x53 size leaves the luma component a padding block column
-// and row that only the interleaved scan carries.
+// TestDecodeNonInterleaved checks a baseline image whose components each occupy
+// their own scan against the interleaved encoding of the same source.
 func TestDecodeNonInterleaved(t *testing.T) {
 	got, err := Decode(bytes.NewReader(test420NonInterleaved))
 	if err != nil {
@@ -1326,4 +1331,203 @@ func TestDecodeSmallSubsampled(t *testing.T) {
 			}
 		})
 	}
+}
+
+// conformanceDirs returns the corpora named by CONFORMANCE_DIR, colon separated.
+func conformanceDirs(t *testing.T) []string {
+	t.Helper()
+
+	env := os.Getenv("CONFORMANCE_DIR")
+	if env == "" {
+		t.Skip("set CONFORMANCE_DIR")
+	}
+
+	return strings.Split(env, ":")
+}
+
+// conformanceRoot returns the corpus holding the JPEG suite.
+func conformanceRoot(t *testing.T) string {
+	t.Helper()
+
+	for _, dir := range conformanceDirs(t) {
+		if _, err := os.Stat(filepath.Join(dir, "valid")); err == nil {
+			return dir
+		}
+	}
+
+	t.Skip("no JPEG corpus in CONFORMANCE_DIR")
+
+	return ""
+}
+
+// conformanceModes are the decode configurations the ratchet pins.
+var conformanceModes = []struct {
+	name string
+	opts *Options
+}{
+	{"native", nil},
+	{"rgba", &Options{ToRGBA: true, UpsampleMethod: CatmullRom}},
+	{"half", &Options{ToRGBA: true, ScaleDenom: 2}},
+}
+
+// conformanceDecode reports the outcome of one decode, and whether it panicked.
+func conformanceDecode(data []byte, opts *Options) (result string, panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = fmt.Sprintf("panic:%v", r)
+			panicked = true
+		}
+	}()
+
+	img, err := Decode(bytes.NewReader(data), opts)
+	if err != nil {
+		return "err:" + err.Error(), false
+	}
+
+	h := sha256.New()
+	b := img.Bounds()
+
+	fmt.Fprintf(h, "%T %d %d", img, b.Dx(), b.Dy())
+
+	switch p := img.(type) {
+	case *image.YCbCr:
+		h.Write(p.Y)
+		h.Write(p.Cb)
+		h.Write(p.Cr)
+	case *image.Gray:
+		h.Write(p.Pix)
+	case *image.RGBA:
+		h.Write(p.Pix)
+	case *image.CMYK:
+		h.Write(p.Pix)
+	default:
+		return "unknown-type", false
+	}
+
+	return fmt.Sprintf("%x", h.Sum(nil))[:16], false
+}
+
+var updateConformance = flag.Bool("conformance.update", false, "rewrite testdata/conformance.txt")
+
+// TestConformance pins every corpus file in three modes against
+// testdata/conformance.txt. Set CONFORMANCE_DIR to run it, -conformance.update
+// to rewrite the reference.
+func TestConformance(t *testing.T) {
+	root := conformanceRoot(t)
+
+	var files []string
+
+	err := filepath.Walk(root, func(p string, fi os.FileInfo, err error) error {
+		if err != nil || fi.IsDir() {
+			return nil //nolint:nilerr
+		}
+
+		switch strings.ToLower(filepath.Ext(p)) {
+		case ".jpg", ".jpeg":
+			rel, relErr := filepath.Rel(root, p)
+			if relErr == nil {
+				files = append(files, rel)
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", root, err)
+	}
+
+	if len(files) == 0 {
+		t.Skipf("no JPEG files under %s", root)
+	}
+
+	sort.Strings(files)
+
+	got := make(map[string]string, len(files))
+
+	for _, rel := range files {
+		data, readErr := os.ReadFile(filepath.Join(root, rel))
+		if readErr != nil {
+			t.Errorf("%s: %v", rel, readErr)
+
+			continue
+		}
+
+		for _, m := range conformanceModes {
+			result, panicked := conformanceDecode(data, m.opts)
+			if panicked {
+				t.Errorf("%s [%s]: %s", rel, m.name, result)
+			}
+
+			got[rel+" "+m.name] = result
+		}
+	}
+
+	const refPath = "testdata/conformance.txt"
+
+	if *updateConformance {
+		var b bytes.Buffer
+
+		for _, rel := range files {
+			for _, m := range conformanceModes {
+				fmt.Fprintf(&b, "%s\t%s\t%s\n", rel, m.name, got[rel+" "+m.name])
+			}
+		}
+
+		if err := os.WriteFile(refPath, b.Bytes(), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", refPath, err)
+		}
+
+		t.Logf("wrote %s: %d files, %d entries", refPath, len(files), len(got))
+
+		return
+	}
+
+	ref, err := os.ReadFile(refPath)
+	if err != nil {
+		t.Fatalf("reading %s (run with -conformance.update to create it): %v", refPath, err)
+	}
+
+	want := make(map[string]string)
+
+	for _, line := range strings.Split(strings.TrimSpace(string(ref)), "\n") {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			t.Fatalf("malformed reference line: %q", line)
+		}
+
+		want[fields[0]+" "+fields[1]] = fields[2]
+	}
+
+	var missing, changed, added int
+
+	for key, w := range want {
+		g, ok := got[key]
+		if !ok {
+			missing++
+
+			continue
+		}
+
+		if g != w {
+			changed++
+
+			t.Errorf("%s: got %s, want %s", key, g, w)
+		}
+	}
+
+	for key := range got {
+		if _, ok := want[key]; !ok {
+			added++
+		}
+	}
+
+	if missing > 0 {
+		t.Logf("%d reference entries had no file in the corpus", missing)
+	}
+
+	if added > 0 {
+		t.Logf("%d corpus entries are not in the reference; rerun with -conformance.update", added)
+	}
+
+	t.Logf("%d files, %d entries, %d changed", len(files), len(got), changed)
 }
