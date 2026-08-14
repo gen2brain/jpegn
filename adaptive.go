@@ -48,8 +48,11 @@ func fastLog2(x float32) float32 {
 	shifted := (xb - 0x3f2aaaab) >> 23
 	m := math.Float32frombits(uint32(xb-shifted<<23)) - 1
 
-	p := (0.74245873327820566*m+1.4287160470083755)*m - 1.8503833400518310e-06
-	q := (0.17409343003366853*m+1.0096718572241148)*m + 0.99032814277590719
+	p := float32(0.74245873327820566*m) + 1.4287160470083755
+	p = float32(p*m) - 1.8503833400518310e-06
+
+	q := float32(0.17409343003366853*m) + 1.0096718572241148
+	q = float32(q*m) + 0.99032814277590719
 
 	return p/q + float32(shifted)
 }
@@ -60,8 +63,13 @@ func fastPow2(x float32) float32 {
 	exp := math.Float32frombits(uint32(int32(fl)+127) << 23)
 	f := x - fl
 
-	num := ((f+10.1749063)*f+48.8687798)*f + 98.5506591
-	den := ((0.210242958*f-0.0222328856)*f-19.4414990)*f + 98.5506633
+	num := f + 10.1749063
+	num = float32(num*f) + 48.8687798
+	num = float32(num*f) + 98.5506591
+
+	den := float32(0.210242958*f) - 0.0222328856
+	den = float32(den*f) - 19.4414990
+	den = float32(den*f) + 98.5506633
 
 	return num * exp / den
 }
@@ -87,7 +95,8 @@ func gammaTerms(v float32) (float32, float32) {
 
 	v2 := v * v
 
-	return aqRatioNumMul*v2 + aqRatioNumOffset, aqRatioDenMul*v*v2 + aqRatioVOffset
+	return float32(aqRatioNumMul*v2) + aqRatioNumOffset,
+		float32(aqRatioDenMul*v*v2) + aqRatioVOffset
 }
 
 // Both callers evaluate the ratio at a fixed offset from a sample, so the whole
@@ -108,7 +117,7 @@ func init() {
 
 // aqMaskingSqrt is jpegli's MaskingSqrt.
 func aqMaskingSqrt(v float32) float32 {
-	return 0.25 * float32(math.Sqrt(float64(v*aqMaskMul+28)))
+	return float32(0.25 * float32(math.Sqrt(float64(float32(v*aqMaskMul)+28))))
 }
 
 // aqComputeMask modulates the exponent by the local masking strength.
@@ -119,10 +128,11 @@ func aqComputeMask(v float32) float32 {
 	}
 
 	v2 := 1 / (v1 + 305.04035728311436)
-	v3 := 1 / (v1*v1 + 2.1925739705298404)
-	v4 := 1 / (v1*v1 + 0.25*2.1925739705298404)
+	v3 := 1 / (float32(v1*v1) + 2.1925739705298404)
+	v4 := 1 / (float32(v1*v1) + 0.25*2.1925739705298404)
 
-	return -0.74174993 + 3.2353257320940401*v4 + 12.906028311180409*v2 + 5.0220313103171232*v3
+	return -0.74174993 + float32(3.2353257320940401*v4) +
+		float32(12.906028311180409*v2) + float32(5.0220313103171232*v3)
 }
 
 // aqField holds the per-block quantization field and its scratch buffers.
@@ -263,8 +273,10 @@ func (a *aqField) fuzzyErosion() {
 			min0, min1, min2, min3 = updateMin4(rowB[m], min0, min1, min2, min3)
 			min0, min1, min2, min3 = updateMin4(rowB[r], min0, min1, min2, min3)
 
-			out[x] = 0.125*math.Float32frombits(min0) + 0.075*math.Float32frombits(min1) +
-				0.06*math.Float32frombits(min2) + 0.05*math.Float32frombits(min3)
+			out[x] = float32(0.125*math.Float32frombits(min0)) +
+				float32(0.075*math.Float32frombits(min1)) +
+				float32(0.06*math.Float32frombits(min2)) +
+				float32(0.05*math.Float32frombits(min3))
 		}
 
 		if y&1 != 1 {
@@ -315,7 +327,7 @@ func (a *aqField) perBlockModulations(c *encComponent, yQuant01 uint16) {
 			hf, gamma := blockModulations(block, c.stride)
 			v := aqComputeMask(a.field[by*a.w+bx]) + hf + gamma
 
-			a.field[by*a.w+bx] = fastPow2(v*aqLog2e)*mul + add
+			a.field[by*a.w+bx] = float32(fastPow2(v*aqLog2e)*mul) + add
 		}
 	}
 }
@@ -330,7 +342,7 @@ func aqDampen(yQuant01 uint16) (float32, float32) {
 		}
 	}
 
-	return aqQuant * dampen, (1 - dampen) * aqBaseLevel
+	return float32(aqQuant * dampen), float32((1 - dampen) * aqBaseLevel)
 }
 
 // blockModulations returns the high frequency and gamma terms of one block,
@@ -359,7 +371,8 @@ func blockModulations(block []byte, stride int) (float32, float32) {
 		}
 	}
 
-	return float32(sum) * aqHfCoeff, aqGammaMul * fastLog2(ratio*aqGammaScale)
+	return float32(float32(sum) * aqHfCoeff),
+		float32(aqGammaMul * fastLog2(ratio*aqGammaScale))
 }
 
 // absInt is branchless because it is applied to differences of random sign.
@@ -392,7 +405,7 @@ func (e *encoder) applyDeadZone(dst, src *[64]int32, nz uint64, ci int, aq float
 		s := src[k]
 		m := s >> 31
 
-		if float32((s^m)-m)*qmul[k] < off[k]+mul[k]*aq {
+		if float32((s^m)-m)*qmul[k] < off[k]+float32(mul[k]*aq) {
 			dst[k] = 0
 			nz &^= 1 << uint(k)
 		}
@@ -410,9 +423,9 @@ func qualityToDistance(quality int) float32 {
 	case quality >= 100:
 		return 0.01
 	case quality >= 30:
-		return 0.1 + (100-q)*0.09
+		return 0.1 + float32((100-q)*0.09)
 	default:
-		return 53.0/3000.0*q*q - 23.0/20.0*q + 25.0
+		return float32(53.0/3000.0*q*q) - float32(23.0/20.0*q) + 25.0
 	}
 }
 
@@ -443,7 +456,8 @@ func (e *encoder) buildZeroBias(quality int) {
 
 	for ci := 0; ci < 3; ci++ {
 		for k := 0; k < 64; k++ {
-			e.zeroBiasMul[ci][k] = mix0*zeroBiasMulLQ[ci*64+k] + mix1*zeroBiasMulHQ[ci*64+k]
+			e.zeroBiasMul[ci][k] = float32(mix0*zeroBiasMulLQ[ci*64+k]) +
+				float32(mix1*zeroBiasMulHQ[ci*64+k])
 			e.zeroBiasOff[ci][k] = zeroBiasOffAC[ci]
 		}
 
