@@ -2,8 +2,8 @@
 
 #include "textflag.h"
 
-// NEON quantization, bit-identical to quantizeBlockScalar. Go's arm64 assembler
-// lacks SSHR and SMULL, so both are encoded by the macros below.
+// NEON quantization, bit-identical to quantizeBlockScalar. SSHR and SMULL are
+// missing from the assembler, so the macros below encode them.
 
 #define SSHR4S(k, n, d)    WORD $(0x4F000400 | ((64 - (k)) << 16) | ((n) << 5) | (d))
 #define SMULL2D(m, n, d)   WORD $(0x0EA0C000 | ((m) << 16) | ((n) << 5) | (d))

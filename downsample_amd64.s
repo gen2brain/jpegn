@@ -3,8 +3,7 @@
 #include "textflag.h"
 
 // AVX2 2x2 chroma box filter, bit-identical to downsampleRow2x2Scalar.
-// VPMADDUBSW against a vector of ones sums adjacent byte pairs into 16-bit
-// lanes, so the four samples add without ever leaving the register.
+// VPMADDUBSW against ones sums adjacent byte pairs into 16-bit lanes.
 
 DATA dsone<>+0(SB)/8, $0x0101010101010101
 DATA dsone<>+8(SB)/8, $0x0101010101010101

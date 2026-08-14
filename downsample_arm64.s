@@ -2,8 +2,8 @@
 
 #include "textflag.h"
 
-// NEON 2x2 chroma box filter, bit-identical to downsampleRow2x2Scalar. UADDLP
-// sums adjacent byte pairs into 16-bit lanes; Go's arm64 assembler lacks it.
+// NEON 2x2 chroma box filter, bit-identical to downsampleRow2x2Scalar.
+// UADDLP sums adjacent byte pairs into 16-bit lanes; the assembler lacks it.
 
 #define UADDLP8H(n, d) WORD $(0x6E202800 | ((n) << 5) | (d))
 

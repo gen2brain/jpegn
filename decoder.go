@@ -1375,8 +1375,7 @@ markerLoop:
 
 			scansCompleted++
 
-			// Baseline is done once every component has been covered; a
-			// non-interleaved image spends one scan on each.
+			// Baseline is done once every component has been covered.
 			if d.isBaseline && d.scanned == 1<<uint(d.ncomp)-1 {
 				break markerLoop
 			}

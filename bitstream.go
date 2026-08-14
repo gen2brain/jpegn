@@ -17,8 +17,7 @@ func (d *decoder) showBits(bits int) int {
 	}
 
 	if !d.markerHit {
-		// Take four bytes at a time while none of them is 0xFF, so the common
-		// stuffing-free run costs one load instead of four branches.
+		// Four bytes at a time while none of them is 0xFF.
 		for d.bufBits <= 32 && d.bufBits < bits && d.size >= 4 {
 			v := binary.BigEndian.Uint32(d.jpegData[d.pos:])
 			if (^v-0x01010101)&v&0x80808080 != 0 {

@@ -1,7 +1,6 @@
 package jpegn
 
-// downsampleRow2x2Scalar box-filters 2x2 sample groups from two source rows
-// into n destination samples.
+// downsampleRow2x2Scalar box-filters 2x2 sample groups into n samples.
 func downsampleRow2x2Scalar(dst, src0, src1 []byte, n int) {
 	d := dst[:n]
 	s0, s1 := src0[:n*2], src1[:n*2]
