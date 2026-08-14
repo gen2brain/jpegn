@@ -43,8 +43,8 @@ libjpeg-turbo at quality 50; optimized Huffman tables save ~4% at quality 50, ri
 quality 95.
 
 Against the standard library, ~1.9x on progressive and ~3.1x on baseline decode, ~2.9x decoding
-straight to RGBA, and ~4x to ~5.5x on encode, in two allocations rather than twelve. SIMD is
-worth ~1.3x to ~3.4x over `-tags noasm`.
+straight to RGBA, and ~4.5x to ~6.3x on encode, in two allocations rather than twelve. SIMD is
+worth ~1.3x to ~3.7x over `-tags noasm`.
 
 ### License
 
