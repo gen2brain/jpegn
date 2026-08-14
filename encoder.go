@@ -601,21 +601,10 @@ func (e *encoder) flushBits() {
 
 // magnitude returns the JPEG size category of v and the coefficient bits.
 func magnitude(v int32) (uint8, uint32) {
-	if v == 0 {
-		return 0, 0
-	}
+	m := v >> 31
+	n := bits.Len32(uint32((v ^ m) - m))
 
-	a := v
-	if a < 0 {
-		a = -a
-	}
-
-	n := bits.Len32(uint32(a))
-	if v < 0 {
-		v += 1<<uint(n) - 1
-	}
-
-	return uint8(n), uint32(v)
+	return uint8(n), uint32(v + (1<<uint(n)-1)&m)
 }
 
 // scan walks the MCUs, gathering statistics or emitting coded data.
