@@ -358,8 +358,7 @@ func (d *decoder) decodeScanProgressiveDC(nCompScan int, scanComp [4]int, ah, al
 							// First pass - decode DC coefficient difference
 							var diff int
 
-							// Check for data exhaustion BEFORE attempting to decode
-							if d.markerHit || (d.size == 0 && d.bufBits == 0) {
+							if d.bufBits == 0 && (d.markerHit || d.size == 0) {
 								// No data left - use diff=0
 								diff = 0
 							} else {
@@ -372,7 +371,7 @@ func (d *decoder) decodeScanProgressiveDC(nCompScan int, scanComp [4]int, ah, al
 							c.coeffs[coeffOffset] = int32(c.dcPred) << al
 						} else {
 							// Refinement pass
-							if d.markerHit || (d.size == 0 && d.bufBits == 0) {
+							if d.bufBits == 0 && (d.markerHit || d.size == 0) {
 								// Skip refinement if no data
 								continue
 							}
@@ -633,15 +632,7 @@ func (d *decoder) decodeBlockACFirst(c *component, offset, ss, se, al, blockInde
 			// EOB (End of Block) run
 			run := 1 << r
 			if r > 0 {
-				// Read EOB run length bits
-				bits := d.getBits(int(r))
-
-				if d.markerHit {
-					// If marker hit while reading EOB run length bits, treat as simple EOB
-					return
-				}
-
-				run += bits
+				run += d.getBits(int(r))
 			}
 
 			// Clamp EOB run to the number of remaining blocks. (JPEG standard Annex G.2.3)
@@ -728,14 +719,7 @@ loop:
 			if val0 != 0x0f { // EOB
 				eobRun := int32(1) << val0
 				if val0 > 0 {
-					bits := d.getBits(int(val0))
-					if false { // BUG FIX: removed markerHit check to allow decoding with padded bits
-						// If marker hit during EOB run bits read, the scan must terminate.
-						return nil
-					}
-
-					// Use += for standard compliance.
-					eobRun += int32(bits)
+					eobRun += int32(d.getBits(int(val0)))
 				}
 
 				maxRun := int32(remainingBlocks)

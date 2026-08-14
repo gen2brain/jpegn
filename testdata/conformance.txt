@@ -73,9 +73,9 @@ crash-repro/jpeg-decoder-257/l1048750854.jpg	half	7a26ed1db5d7c197
 crash-repro/jpeg-decoder-257/myasnik-1120120038_i_6092.jpg	native	c65896a1f83e9e80
 crash-repro/jpeg-decoder-257/myasnik-1120120038_i_6092.jpg	rgba	30ec586cb9798bbd
 crash-repro/jpeg-decoder-257/myasnik-1120120038_i_6092.jpg	half	6d602da840ff0809
-crash-repro/jpeg-decoder-257/painting-20180529-peter-miork-mionsted-peder-mork-monsted-danish-realist-pai-4.jpg	native	f5ae69488f0c3e39
-crash-repro/jpeg-decoder-257/painting-20180529-peter-miork-mionsted-peder-mork-monsted-danish-realist-pai-4.jpg	rgba	50abd992b7ff011c
-crash-repro/jpeg-decoder-257/painting-20180529-peter-miork-mionsted-peder-mork-monsted-danish-realist-pai-4.jpg	half	acceafa874b8e527
+crash-repro/jpeg-decoder-257/painting-20180529-peter-miork-mionsted-peder-mork-monsted-danish-realist-pai-4.jpg	native	627f2ea47be96be6
+crash-repro/jpeg-decoder-257/painting-20180529-peter-miork-mionsted-peder-mork-monsted-danish-realist-pai-4.jpg	rgba	1c88fef1c703dc6a
+crash-repro/jpeg-decoder-257/painting-20180529-peter-miork-mionsted-peder-mork-monsted-danish-realist-pai-4.jpg	half	af844bf054db15d5
 crash-repro/jpeg-decoder-257/textures-20181017-osen-listia-fon-background-autumn-leaves-osennie-maple.jpg	native	c5c1af6e6581e494
 crash-repro/jpeg-decoder-257/textures-20181017-osen-listia-fon-background-autumn-leaves-osennie-maple.jpg	rgba	b32016aaf0726a0c
 crash-repro/jpeg-decoder-257/textures-20181017-osen-listia-fon-background-autumn-leaves-osennie-maple.jpg	half	b7558aab13eb7127
@@ -91,9 +91,9 @@ crash-repro/jpeg-decoder/jd_052_rst_marker.jpg	half	59065be654db87df
 crash-repro/jpeg-decoder/jd_095_exif_zero.jpg	native	1557de2bf5143bed
 crash-repro/jpeg-decoder/jd_095_exif_zero.jpg	rgba	e87a5bcdb4ff6407
 crash-repro/jpeg-decoder/jd_095_exif_zero.jpg	half	7b3ae20f310161c2
-crash-repro/jpeg-decoder/jd_110_invalid_dht.jpg	native	0db8fcc62d7ebc23
-crash-repro/jpeg-decoder/jd_110_invalid_dht.jpg	rgba	71454e91e9a81b1c
-crash-repro/jpeg-decoder/jd_110_invalid_dht.jpg	half	1ff81502d78c1677
+crash-repro/jpeg-decoder/jd_110_invalid_dht.jpg	native	02cdf5378ef031a0
+crash-repro/jpeg-decoder/jd_110_invalid_dht.jpg	rgba	7ada7bf987da5539
+crash-repro/jpeg-decoder/jd_110_invalid_dht.jpg	half	b23aaff9acd4b359
 crash-repro/jpeg-decoder/jd_125_oob_access.jpg	native	c17d105963c85796
 crash-repro/jpeg-decoder/jd_125_oob_access.jpg	rgba	c17d105963c85796
 crash-repro/jpeg-decoder/jd_125_oob_access.jpg	half	128d28926070af16
@@ -133,9 +133,9 @@ crash-repro/libjpeg-turbo/ljt_347_signed_overflow_dc_1.jpg	half	90bbca20bbc099cd
 crash-repro/libjpeg-turbo/ljt_347_signed_overflow_dc_2.jpg	native	886649994dd5e2bc
 crash-repro/libjpeg-turbo/ljt_347_signed_overflow_dc_2.jpg	rgba	46bff4f9e24ee511
 crash-repro/libjpeg-turbo/ljt_347_signed_overflow_dc_2.jpg	half	90bbca20bbc099cd
-crash-repro/libjpeg-turbo/ljt_509_missing_huffman_table.jpg	native	40991261fbf7f2c2
-crash-repro/libjpeg-turbo/ljt_509_missing_huffman_table.jpg	rgba	636588d8016ab26a
-crash-repro/libjpeg-turbo/ljt_509_missing_huffman_table.jpg	half	4904459fd78ea059
+crash-repro/libjpeg-turbo/ljt_509_missing_huffman_table.jpg	native	10b561fbaa64d04d
+crash-repro/libjpeg-turbo/ljt_509_missing_huffman_table.jpg	rgba	f2d610b8dfca9252
+crash-repro/libjpeg-turbo/ljt_509_missing_huffman_table.jpg	half	8215be690a661101
 crash-repro/libjpeg-turbo/ljt_669_uaf_ycc_rgb_a.jpg	native	err:unsupported format
 crash-repro/libjpeg-turbo/ljt_669_uaf_ycc_rgb_a.jpg	rgba	err:unsupported format
 crash-repro/libjpeg-turbo/ljt_669_uaf_ycc_rgb_a.jpg	half	err:unsupported format
@@ -178,9 +178,9 @@ crash-repro/zune-jpeg/zj_188_upsample_assert.jpg	half	fd75e89eefc22e03
 crash-repro/zune-jpeg/zj_207_mcu_range_cmyk.jpg	native	err:unsupported format
 crash-repro/zune-jpeg/zj_207_mcu_range_cmyk.jpg	rgba	fca824666f705c49
 crash-repro/zune-jpeg/zj_207_mcu_range_cmyk.jpg	half	311d341ad0151798
-crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	native	083e11f383b3ba32
-crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	rgba	ace54f45419e299c
-crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	half	266019d79a8724b9
+crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	native	484affc73635c8fc
+crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	rgba	085c7411b5219a57
+crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	half	f020e5c3a90f6a85
 crash-repro/zune-jpeg/zj_246_unknown_marker.jpg	native	8590c7dcdf27fb8c
 crash-repro/zune-jpeg/zj_246_unknown_marker.jpg	rgba	f7112e479304d8a6
 crash-repro/zune-jpeg/zj_246_unknown_marker.jpg	half	8c2f2d707601702d
@@ -193,12 +193,12 @@ crash-repro/zune-jpeg/zj_266_exhausted_data.jpg	half	aff6f96b737324e1
 crash-repro/zune-jpeg/zj_269_exhausted_data.jpg	native	2a003700a3747524
 crash-repro/zune-jpeg/zj_269_exhausted_data.jpg	rgba	a2a61051c335c9a8
 crash-repro/zune-jpeg/zj_269_exhausted_data.jpg	half	3f80fcb2fb78bef9
-crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	native	2b8018148bce1454
-crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	rgba	4d7578f5a891759e
-crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	half	c626f7a2780134e5
-crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	native	9ec3e00706076fe4
-crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	rgba	32dbe885b84b74f7
-crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	half	87044fe5e33f3608
+crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	native	61b6383ac13cbbe0
+crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	rgba	4cf0a71ad1d9e520
+crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	half	a6425644bf21a129
+crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	native	20b23a1a0bfd5282
+crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	rgba	8918d4f1581cd11f
+crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	half	fbe16fc5265907df
 crash-repro/zune-jpeg/zj_275_cmyk_3comp.jpg	native	e9737064633e81a2
 crash-repro/zune-jpeg/zj_275_cmyk_3comp.jpg	rgba	bff1a87d5089c7c9
 crash-repro/zune-jpeg/zj_275_cmyk_3comp.jpg	half	3594bbc0d2ba6b63
@@ -259,15 +259,15 @@ invalid/28c74d9284d9836017fd519f6932efd8.jpg	half	6d6cd92d39bce074
 invalid/2c9e7a1805f8b47630bbb83d21bf8222.jpg	native	90ca586265cc8c59
 invalid/2c9e7a1805f8b47630bbb83d21bf8222.jpg	rgba	d321522c5abafe5a
 invalid/2c9e7a1805f8b47630bbb83d21bf8222.jpg	half	8d398c47ce928074
-invalid/316be81dfdeeb942e904feb3a77f4f83.jpg	native	d50a14993de9ce67
-invalid/316be81dfdeeb942e904feb3a77f4f83.jpg	rgba	3ec1ab4fe6747b83
-invalid/316be81dfdeeb942e904feb3a77f4f83.jpg	half	f3fa6907edc63be1
+invalid/316be81dfdeeb942e904feb3a77f4f83.jpg	native	6376e28e7049fda9
+invalid/316be81dfdeeb942e904feb3a77f4f83.jpg	rgba	e96eaf997f8576fa
+invalid/316be81dfdeeb942e904feb3a77f4f83.jpg	half	2c760e540472044f
 invalid/32d08f4a5eb10332506ebedbb9bc7257.jpg	native	4a0a3a46c8f04328
 invalid/32d08f4a5eb10332506ebedbb9bc7257.jpg	rgba	28ee495f72220082
 invalid/32d08f4a5eb10332506ebedbb9bc7257.jpg	half	6499479603eed8d4
-invalid/3976a754ef0aca80e84e2c403d714579.jpg	native	c71913ecbb35f30d
-invalid/3976a754ef0aca80e84e2c403d714579.jpg	rgba	600aad45560b95b3
-invalid/3976a754ef0aca80e84e2c403d714579.jpg	half	7dcfc2a4a8a049c1
+invalid/3976a754ef0aca80e84e2c403d714579.jpg	native	c8c4c22b5decaf54
+invalid/3976a754ef0aca80e84e2c403d714579.jpg	rgba	93ddbd36d47c6782
+invalid/3976a754ef0aca80e84e2c403d714579.jpg	half	a96a65332977d61a
 invalid/39f43f280b31152f1d27df3f9d189317.jpg	native	err:unsupported format
 invalid/39f43f280b31152f1d27df3f9d189317.jpg	rgba	err:unsupported format
 invalid/39f43f280b31152f1d27df3f9d189317.jpg	half	err:unsupported format
