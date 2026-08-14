@@ -307,7 +307,7 @@ func (d *decoder) decodeScanProgressiveDC(nCompScan int, scanComp [4]int, ah, al
 				}
 
 				// Handle restart markers
-				if d.rstInterval > 0 && !d.markerHit {
+				if d.rstInterval > 0 && d.size > 0 {
 					rstCount--
 					if rstCount == 0 {
 						if !d.processRestart(&nextRst, &rstCount, ah, 1, scanComp) {
@@ -381,7 +381,7 @@ func (d *decoder) decodeScanProgressiveDC(nCompScan int, scanComp [4]int, ah, al
 			}
 
 			// Handle restart markers
-			if d.rstInterval > 0 && !d.markerHit && d.size > 0 {
+			if d.rstInterval > 0 && d.size > 0 {
 				rstCount--
 				if rstCount == 0 {
 					if !d.processRestart(&nextRst, &rstCount, ah, nCompScan, scanComp) {
@@ -566,7 +566,7 @@ acBlocks:
 			blockIndex++
 
 			// Handle restart markers (checked after every block)
-			if d.rstInterval > 0 && !d.markerHit {
+			if d.rstInterval > 0 && d.size > 0 {
 				rstCount--
 				if rstCount == 0 {
 					// AC scans are always single component (nCompScan=1).

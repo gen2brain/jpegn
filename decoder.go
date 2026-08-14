@@ -217,20 +217,8 @@ func (d *decoder) panic(err error) {
 func (d *decoder) processRestart(nextRst *int, rstCount *int, ah int, nCompScan int, scanComp [4]int) bool {
 	// This function is called when rstCount reaches 0.
 
-	// Align the bitstream to byte boundary (discard padding bits 0-7).
-	d.byteAlign()
-
-	// Calculate number of full bytes buffered.
-	// d.byteAlign() ensures d.bufBits is a multiple of 8.
-	bufferedBytes := d.bufBits / 8
-
-	// Rewind d.pos by the number of buffered bytes.
-	if bufferedBytes > 0 {
-		d.pos -= bufferedBytes
-		d.size += bufferedBytes
-	}
-
-	// Discard the buffer content now that d.pos is synchronized.
+	// Everything still buffered at an interval boundary is pad-to-byte filler,
+	// so drop it rather than rewinding onto it.
 	d.buf = 0
 	d.bufBits = 0
 

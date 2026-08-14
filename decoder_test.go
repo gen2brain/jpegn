@@ -27,6 +27,9 @@ var test420o []byte
 //go:embed testdata/test.420.odd.jpg
 var test420odd []byte
 
+//go:embed testdata/test.420.progressive.rst.jpg
+var test420progRst []byte
+
 //go:embed testdata/test.420.noninterleaved.jpg
 var test420NonInterleaved []byte
 
@@ -1198,6 +1201,40 @@ func TestDecodeNonInterleaved(t *testing.T) {
 
 	if !nonZero {
 		t.Fatal("chroma planes are empty, the later scans were skipped")
+	}
+}
+
+// TestDecodeProgressiveRestart checks a progressive image with restart intervals
+// against the same source coded without them; the coefficients are identical, so
+// only the entropy layout differs.
+func TestDecodeProgressiveRestart(t *testing.T) {
+	got, err := Decode(bytes.NewReader(test420progRst))
+	if err != nil {
+		t.Fatalf("Decode failed for progressive image with restarts: %v", err)
+	}
+
+	b := got.Bounds()
+	if b.Dx() != 128 || b.Dy() != 128 {
+		t.Fatalf("bounds %v, want 128x128", b)
+	}
+
+	ycc, ok := got.(*image.YCbCr)
+	if !ok {
+		t.Fatalf("got %T, want *image.YCbCr", got)
+	}
+
+	var nonZero bool
+
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if ycc.Cb[ycc.COffset(x, y)] != 0 || ycc.Cr[ycc.COffset(x, y)] != 0 {
+				nonZero = true
+			}
+		}
+	}
+
+	if !nonZero {
+		t.Fatal("chroma planes are empty, the scans after the first restart were skipped")
 	}
 }
 

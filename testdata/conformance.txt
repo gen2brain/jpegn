@@ -109,9 +109,9 @@ crash-repro/jpeg-decoder/jd_151_unset_quant_table.jpg	half	9293fca42d275540
 crash-repro/jpeg-decoder/jd_169_corrupt_no_error.jpg	native	81267057f789c0b3
 crash-repro/jpeg-decoder/jd_169_corrupt_no_error.jpg	rgba	15bb9c236719c94f
 crash-repro/jpeg-decoder/jd_169_corrupt_no_error.jpg	half	61766845e4e4dae7
-crash-repro/jpeg-decoder/jd_173_corrupt_output.jpg	native	err:syntax error
-crash-repro/jpeg-decoder/jd_173_corrupt_output.jpg	rgba	err:syntax error
-crash-repro/jpeg-decoder/jd_173_corrupt_output.jpg	half	err:syntax error
+crash-repro/jpeg-decoder/jd_173_corrupt_output.jpg	native	1eb1f579043d53e1
+crash-repro/jpeg-decoder/jd_173_corrupt_output.jpg	rgba	d3bd66d761ac513f
+crash-repro/jpeg-decoder/jd_173_corrupt_output.jpg	half	2fc4c2b172810945
 crash-repro/jpeg-decoder/jd_194_release_panic.jpg	native	175773853b0f5af0
 crash-repro/jpeg-decoder/jd_194_release_panic.jpg	rgba	9e00717a52181b69
 crash-repro/jpeg-decoder/jd_194_release_panic.jpg	half	8b29508cdf9b3727
@@ -178,9 +178,9 @@ crash-repro/zune-jpeg/zj_188_upsample_assert.jpg	half	dca2ca4af9d3e500
 crash-repro/zune-jpeg/zj_207_mcu_range_cmyk.jpg	native	err:unsupported format
 crash-repro/zune-jpeg/zj_207_mcu_range_cmyk.jpg	rgba	fca824666f705c49
 crash-repro/zune-jpeg/zj_207_mcu_range_cmyk.jpg	half	311d341ad0151798
-crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	native	err:syntax error
-crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	rgba	err:syntax error
-crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	half	err:syntax error
+crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	native	083e11f383b3ba32
+crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	rgba	ace54f45419e299c
+crash-repro/zune-jpeg/zj_243_progressive_lowres.jpg	half	28b1269cdf35cc86
 crash-repro/zune-jpeg/zj_246_unknown_marker.jpg	native	8590c7dcdf27fb8c
 crash-repro/zune-jpeg/zj_246_unknown_marker.jpg	rgba	f7112e479304d8a6
 crash-repro/zune-jpeg/zj_246_unknown_marker.jpg	half	dda2a564d48a0dcf
@@ -193,12 +193,12 @@ crash-repro/zune-jpeg/zj_266_exhausted_data.jpg	half	7404ce51a0fb0736
 crash-repro/zune-jpeg/zj_269_exhausted_data.jpg	native	2a003700a3747524
 crash-repro/zune-jpeg/zj_269_exhausted_data.jpg	rgba	a2a61051c335c9a8
 crash-repro/zune-jpeg/zj_269_exhausted_data.jpg	half	5454944a422472a9
-crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	native	err:syntax error
-crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	rgba	err:syntax error
-crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	half	err:syntax error
-crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	native	err:syntax error
-crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	rgba	err:syntax error
-crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	half	err:syntax error
+crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	native	2b8018148bce1454
+crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	rgba	4d7578f5a891759e
+crash-repro/zune-jpeg/zj_270_no_more_bytes_1.jpg	half	bee869263673b2b1
+crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	native	9ec3e00706076fe4
+crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	rgba	32dbe885b84b74f7
+crash-repro/zune-jpeg/zj_270_no_more_bytes_2.jpg	half	5c8e95ee6590c8f7
 crash-repro/zune-jpeg/zj_275_cmyk_3comp.jpg	native	e9737064633e81a2
 crash-repro/zune-jpeg/zj_275_cmyk_3comp.jpg	rgba	bff1a87d5089c7c9
 crash-repro/zune-jpeg/zj_275_cmyk_3comp.jpg	half	11a3643b9c4b0799
