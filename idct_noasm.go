@@ -244,11 +244,12 @@ func idct8x8To2x2(blk *[64]int32, out []byte, outOffset int, stride int) {
 	out[outOffset+stride+1] = clamp(((r1 - r3 + 4) >> 3) + 128)
 }
 
-// Fixed-point cosines for the 4-point inverse DCT, scaled by 2^13.
+// Rotation constants for the 4-point inverse DCT, scaled by 2^13. The even
+// terms need no multiply: the common 1/sqrt(2) is folded into the odd pair and
+// paid for once in the final shift.
 const (
-	rc1 = 7568 // cos(pi/8)
-	rc2 = 5793 // cos(2*pi/8), also 1/sqrt(2)
-	rc3 = 3135 // cos(3*pi/8)
+	rk1 = 10703 // cos(pi/8) / cos(pi/4)
+	rk3 = 4433  // cos(3*pi/8) / cos(pi/4)
 )
 
 // idct8x8To4x4 evaluates the 4-point inverse DCT over the top-left 4x4
@@ -262,11 +263,10 @@ func idct8x8To4x4(blk *[64]int32, out []byte, outOffset int, stride int) {
 		f2 := blk[i*8+2]
 		f3 := blk[i*8+3]
 
-		a := f0 * rc2
-		t0 := a + f2*rc2
-		t1 := a - f2*rc2
-		p := f1*rc1 + f3*rc3
-		q := f1*rc3 - f3*rc1
+		t0 := (f0 + f2) << 13
+		t1 := (f0 - f2) << 13
+		p := f1*rk1 + f3*rk3
+		q := f1*rk3 - f3*rk1
 
 		tmp[i*4+0] = (t0 + p + (1 << 7)) >> 8
 		tmp[i*4+1] = (t1 + q + (1 << 7)) >> 8
@@ -280,15 +280,14 @@ func idct8x8To4x4(blk *[64]int32, out []byte, outOffset int, stride int) {
 		f2 := tmp[2*4+i]
 		f3 := tmp[3*4+i]
 
-		a := f0 * rc2
-		t0 := a + f2*rc2
-		t1 := a - f2*rc2
-		p := f1*rc1 + f3*rc3
-		q := f1*rc3 - f3*rc1
+		t0 := (f0 + f2) << 13
+		t1 := (f0 - f2) << 13
+		p := f1*rk1 + f3*rk3
+		q := f1*rk3 - f3*rk1
 
-		out[outOffset+0*stride+i] = clamp(((t0 + p + (1 << 19)) >> 20) + 128)
-		out[outOffset+1*stride+i] = clamp(((t1 + q + (1 << 19)) >> 20) + 128)
-		out[outOffset+2*stride+i] = clamp(((t1 - q + (1 << 19)) >> 20) + 128)
-		out[outOffset+3*stride+i] = clamp(((t0 - p + (1 << 19)) >> 20) + 128)
+		out[outOffset+0*stride+i] = clamp(((t0 + p + (1 << 20)) >> 21) + 128)
+		out[outOffset+1*stride+i] = clamp(((t1 + q + (1 << 20)) >> 21) + 128)
+		out[outOffset+2*stride+i] = clamp(((t1 - q + (1 << 20)) >> 21) + 128)
+		out[outOffset+3*stride+i] = clamp(((t0 - p + (1 << 20)) >> 21) + 128)
 	}
 }
