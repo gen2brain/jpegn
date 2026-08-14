@@ -263,27 +263,39 @@ func downsampleChroma(dstCb, dstCr, buf []byte, w, cw, sx, rows int) {
 		full--
 	}
 
+	outCb, outCr := dstCb[:full], dstCr[:full]
+
 	switch {
 	case sx == 2 && rows == 2:
-		for cx := 0; cx < full; cx++ {
+		n := full * 2
+		sCb0, sCb1 := cb0[:n], cb1[:n]
+		sCr0, sCr1 := cr0[:n], cr1[:n]
+
+		for cx := range outCb {
 			x := cx * 2
-			dstCb[cx] = byte((int32(cb0[x]) + int32(cb0[x+1]) + int32(cb1[x]) + int32(cb1[x+1]) + 2) >> 2)
-			dstCr[cx] = byte((int32(cr0[x]) + int32(cr0[x+1]) + int32(cr1[x]) + int32(cr1[x+1]) + 2) >> 2)
+			outCb[cx] = byte((int32(sCb0[x]) + int32(sCb0[x+1]) + int32(sCb1[x]) + int32(sCb1[x+1]) + 2) >> 2)
+			outCr[cx] = byte((int32(sCr0[x]) + int32(sCr0[x+1]) + int32(sCr1[x]) + int32(sCr1[x+1]) + 2) >> 2)
 		}
 	case sx == 2:
-		for cx := 0; cx < full; cx++ {
+		n := full * 2
+		sCb0, sCr0 := cb0[:n], cr0[:n]
+
+		for cx := range outCb {
 			x := cx * 2
-			dstCb[cx] = byte((int32(cb0[x]) + int32(cb0[x+1]) + 1) >> 1)
-			dstCr[cx] = byte((int32(cr0[x]) + int32(cr0[x+1]) + 1) >> 1)
+			outCb[cx] = byte((int32(sCb0[x]) + int32(sCb0[x+1]) + 1) >> 1)
+			outCr[cx] = byte((int32(sCr0[x]) + int32(sCr0[x+1]) + 1) >> 1)
 		}
 	case rows == 2:
-		for cx := 0; cx < full; cx++ {
-			dstCb[cx] = byte((int32(cb0[cx]) + int32(cb1[cx]) + 1) >> 1)
-			dstCr[cx] = byte((int32(cr0[cx]) + int32(cr1[cx]) + 1) >> 1)
+		sCb0, sCb1 := cb0[:full], cb1[:full]
+		sCr0, sCr1 := cr0[:full], cr1[:full]
+
+		for cx := range outCb {
+			outCb[cx] = byte((int32(sCb0[cx]) + int32(sCb1[cx]) + 1) >> 1)
+			outCr[cx] = byte((int32(sCr0[cx]) + int32(sCr1[cx]) + 1) >> 1)
 		}
 	default:
-		copy(dstCb[:full], cb0[:full])
-		copy(dstCr[:full], cr0[:full])
+		copy(outCb, cb0[:full])
+		copy(outCr, cr0[:full])
 	}
 
 	for cx := full; cx < cw; cx++ {
