@@ -2,6 +2,8 @@ package jpegn
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -698,6 +700,10 @@ func BenchmarkEncodeRGBA420Optimize(b *testing.B) {
 	benchEncode(b, photoRGBA(b), &EncodeOptions{Quality: 75, Subsampling: Subsample420, OptimizeCoding: true})
 }
 
+func BenchmarkEncodeRGBA420Progressive(b *testing.B) {
+	benchEncode(b, photoRGBA(b), &EncodeOptions{Quality: 75, Subsampling: Subsample420, Progressive: true})
+}
+
 // TestEncodeSizeTable reports compressed size against stdlib.
 func TestEncodeSizeTable(t *testing.T) {
 	photo := photoRGBA(t)
@@ -811,6 +817,250 @@ func TestEncodeScanIsStuffed(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// TestEncodeStable pins the encoder output on every architecture and build tag.
+func TestEncodeStable(t *testing.T) {
+	cases := []struct {
+		sub  Subsampling
+		q    int
+		prog bool
+		rst  int
+		want string
+	}{
+		{Subsample444, 75, false, 0, "03dafaf1b8be26adadd5a662d72af73d392683c395558c6878ffd8bd0677c0fe"},
+		{Subsample444, 75, true, 0, "e39a78dad44a8f5ab1db6b4c208baec12ad89359021aead2aa9fc201f51f3aec"},
+		{Subsample422, 75, false, 0, "cd6050ab89afe5dda3f91c669bd930389c39b6bc44a0415cf4356b02cc4a5836"},
+		{Subsample422, 75, true, 0, "33784848849fa5e77b8aa3c4cc699727b7a9cc9faa5914346ab468a25470458f"},
+		{Subsample440, 75, false, 0, "2c3c9399abba30ad4955314552d3103fdecb47cefdc0b44ee5884f7489989166"},
+		{Subsample440, 75, true, 0, "aecf009a37fa5e7d84ad455c60b3d39adb5c5aff014e91bf094897afb75efa3e"},
+		{Subsample420, 75, false, 0, "3e9c0f9c6fa27fd0a4a7b50284a906401c7fd5754554a9e48c2e8604a546aac0"},
+		{Subsample420, 75, true, 0, "c50e70f1f66e69bacded5c08e10f09e5f859474e5c66e45448831eb755655648"},
+		{SubsampleGray, 75, false, 0, "34989570baa850dcf2476ec302eaa65ea84dce23f43b8847c4ffad19c7c72983"},
+		{SubsampleGray, 75, true, 0, "726e9a340bf4038660595f64afc6a9924bfcf376b976b0a17ec3710cab207679"},
+		{Subsample420, 90, true, 7, "d562651562eec7470c05ee617c189ef6caffb38e85c8ff552ff3a10713d9b055"},
+	}
+
+	src := synthImage(129, 71)
+
+	for _, tc := range cases {
+		data := encodeToBytes(t, src, &EncodeOptions{
+			Quality: tc.q, Subsampling: tc.sub, Progressive: tc.prog,
+			OptimizeCoding: !tc.prog, RestartInterval: tc.rst,
+		})
+
+		if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != tc.want {
+			t.Errorf("sub %d q%d prog=%v rst%d: %s, want %s",
+				tc.sub, tc.q, tc.prog, tc.rst, got, tc.want)
+		}
+	}
+}
+
+// decodeRGBA decodes with our own decoder and returns the pixels.
+func decodeRGBA(t *testing.T, data []byte) *image.RGBA {
+	t.Helper()
+
+	m, err := Decode(bytes.NewReader(data), &Options{ToRGBA: true})
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	rgba, ok := m.(*image.RGBA)
+	if !ok {
+		t.Fatalf("Decode returned %T, want *image.RGBA", m)
+	}
+
+	return rgba
+}
+
+// TestEncodeProgressiveMatchesSequential checks the scans carry the sequential coefficients.
+func TestEncodeProgressiveMatchesSequential(t *testing.T) {
+	subs := []Subsampling{Subsample444, Subsample422, Subsample440, Subsample420}
+
+	for _, sz := range []image.Point{{1, 1}, {8, 8}, {17, 9}, {129, 71}} {
+		src := synthImage(sz.X, sz.Y)
+
+		for _, sub := range subs {
+			for _, q := range []int{20, 75, 100} {
+				seq := encodeToBytes(t, src, &EncodeOptions{
+					Quality: q, Subsampling: sub, OptimizeCoding: true,
+				})
+				prog := encodeToBytes(t, src, &EncodeOptions{
+					Quality: q, Subsampling: sub, Progressive: true,
+				})
+
+				a := decodeRGBA(t, seq)
+				b := decodeRGBA(t, prog)
+
+				if !bytes.Equal(a.Pix, b.Pix) {
+					t.Fatalf("%dx%d sub %d q%d: progressive pixels differ from sequential",
+						sz.X, sz.Y, sub, q)
+				}
+
+				if _, err := jpeg.Decode(bytes.NewReader(prog)); err != nil {
+					t.Fatalf("%dx%d sub %d q%d: stdlib decode: %v", sz.X, sz.Y, sub, q, err)
+				}
+			}
+		}
+	}
+}
+
+func TestEncodeProgressiveGray(t *testing.T) {
+	src := image.NewGray(image.Rect(0, 0, 64, 48))
+	for y := 0; y < 48; y++ {
+		for x := 0; x < 64; x++ {
+			src.SetGray(x, y, color.Gray{Y: uint8((x*4 + y*2) & 0xFF)})
+		}
+	}
+
+	seq := encodeToBytes(t, src, &EncodeOptions{Quality: 85, OptimizeCoding: true})
+	prog := encodeToBytes(t, src, &EncodeOptions{Quality: 85, Progressive: true})
+
+	if !bytes.Equal(decodeRGBA(t, seq).Pix, decodeRGBA(t, prog).Pix) {
+		t.Error("progressive gray pixels differ from sequential")
+	}
+
+	if _, err := jpeg.Decode(bytes.NewReader(prog)); err != nil {
+		t.Errorf("stdlib decode: %v", err)
+	}
+}
+
+// TestEncodeProgressiveMarkers checks the frame marker, scan count and byte stuffing.
+func TestEncodeProgressiveMarkers(t *testing.T) {
+	cases := []struct {
+		sub    Subsampling
+		q      int
+		rst    int
+		scans  int
+		shared bool
+	}{
+		{Subsample420, 80, 0, 15, false},
+		{Subsample422, 80, 0, 15, false},
+		{Subsample444, 80, 0, 13, false},
+		{SubsampleGray, 80, 0, 5, false},
+		{Subsample420, 80, 4, 15, false},
+		{Subsample420, 30, 0, 15, true},
+	}
+
+	src := synthImage(97, 61)
+
+	for _, tc := range cases {
+		data := encodeToBytes(t, src, &EncodeOptions{
+			Quality: tc.q, Subsampling: tc.sub, Progressive: true, RestartInterval: tc.rst,
+		})
+
+		if bytes.Contains(data, []byte{0xFF, markerSOF0}) {
+			t.Errorf("sub %d: baseline SOF0 in a progressive file", tc.sub)
+		}
+
+		scans, tables := 0, 0
+
+		for i := 2; i < len(data); {
+			if data[i] != 0xFF {
+				t.Fatalf("sub %d: expected a marker at %d, got %02X", tc.sub, i, data[i])
+			}
+
+			m := data[i+1]
+			if m == markerEOI {
+				break
+			}
+
+			n := int(data[i+2])<<8 + int(data[i+3])
+			i += 2 + n
+
+			if m == markerDHT {
+				tables++
+			}
+
+			if m != markerSOS {
+				continue
+			}
+
+			scans++
+
+			for i < len(data)-1 {
+				if data[i] != 0xFF {
+					i++
+
+					continue
+				}
+
+				next := data[i+1]
+				if next == 0x00 || (next >= markerRST0 && next <= markerRST0+7) {
+					i += 2
+
+					continue
+				}
+
+				if next != markerDHT && next != markerSOS && next != markerEOI {
+					t.Fatalf("sub %d: unstuffed FF%02X at %d", tc.sub, next, i)
+				}
+
+				break
+			}
+		}
+
+		if scans != tc.scans {
+			t.Errorf("sub %d: %d scans, want %d", tc.sub, scans, tc.scans)
+		}
+
+		if tc.shared && tables >= scans {
+			t.Errorf("sub %d q%d: %d tables for %d scans, none reused",
+				tc.sub, tc.q, tables, scans)
+		}
+	}
+}
+
+// TestEncodeProgressiveSize reports progressive against optimized baseline.
+func TestEncodeProgressiveSize(t *testing.T) {
+	srcs := []struct {
+		name string
+		m    image.Image
+		want float64
+	}{
+		{"graphic", synthImage(769, 512), -8},
+		{"photo", photoRGBA(t), 5},
+	}
+
+	for _, src := range srcs {
+		for _, q := range []int{50, 75, 90} {
+			opt := len(encodeToBytes(t, src.m, &EncodeOptions{
+				Quality: q, Subsampling: Subsample420, OptimizeCoding: true,
+			}))
+			prog := len(encodeToBytes(t, src.m, &EncodeOptions{
+				Quality: q, Subsampling: Subsample420, Progressive: true,
+			}))
+
+			delta := 100 * float64(prog-opt) / float64(opt)
+			t.Logf("%-8s q%-3d optimized %8d progressive %8d %+.1f%%", src.name, q, opt, prog, delta)
+
+			if src.name == "photo" && delta > src.want {
+				t.Errorf("photo q%d: progressive %+.1f%% over optimized", q, delta)
+			}
+
+			if src.name == "graphic" && q >= 75 && delta > src.want {
+				t.Errorf("graphic q%d: progressive only %+.1f%%, want under %.0f%%", q, delta, src.want)
+			}
+		}
+	}
+}
+
+// TestEncodeProgressiveRestart round-trips restart markers through our decoder.
+func TestEncodeProgressiveRestart(t *testing.T) {
+	src := synthImage(120, 88)
+
+	for _, ri := range []int{1, 3, 17, 100000} {
+		plain := encodeToBytes(t, src, &EncodeOptions{
+			Quality: 80, Subsampling: Subsample420, Progressive: true,
+		})
+		data := encodeToBytes(t, src, &EncodeOptions{
+			Quality: 80, Subsampling: Subsample420, Progressive: true, RestartInterval: ri,
+		})
+
+		if !bytes.Equal(decodeRGBA(t, plain).Pix, decodeRGBA(t, data).Pix) {
+			t.Errorf("ri %d: pixels differ from the same image without restarts", ri)
 		}
 	}
 }

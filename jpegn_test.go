@@ -124,10 +124,13 @@ func FuzzEncode(f *testing.F) {
 			src.Pix[i] = 0xFF
 		}
 
+		prog := sub/6&1 == 1
+
 		opts := &EncodeOptions{
 			Quality:         int(quality)%101 + 1,
 			Subsampling:     Subsampling(int(sub) % 6),
 			OptimizeCoding:  optimize,
+			Progressive:     prog,
 			RestartInterval: int(rst),
 		}
 
@@ -138,18 +141,23 @@ func FuzzEncode(f *testing.F) {
 
 		data := buf.Bytes()
 
-		std, err := jpeg.Decode(bytes.NewReader(data))
-		if err != nil {
-			t.Fatalf("stdlib decode: %v", err)
-		}
-
-		if std.Bounds().Dx() != width || std.Bounds().Dy() != height {
-			t.Fatalf("stdlib bounds = %v, want %dx%d", std.Bounds(), width, height)
-		}
-
 		got, err := Decode(bytes.NewReader(data))
 		if err != nil {
 			t.Fatalf("Decode: %v", err)
+		}
+
+		if got.Bounds().Dx() != width || got.Bounds().Dy() != height {
+			t.Fatalf("bounds = %v, want %dx%d", got.Bounds(), width, height)
+		}
+
+		// The stdlib cannot read progressive restarts.
+		if prog && rst > 0 {
+			return
+		}
+
+		std, err := jpeg.Decode(bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("stdlib decode: %v", err)
 		}
 
 		if got.Bounds() != std.Bounds() {
