@@ -2,6 +2,12 @@
 
 #include "textflag.h"
 
+#define MUL4S(m, n, d) WORD $(0x4EA09C00 | ((m) << 16) | ((n) << 5) | (d))
+#define SQXTUN8B(n, d) WORD $(0x2E212800 | ((n) << 5) | (d))
+#define SSHR4S(k, n, d) WORD $(0x4F000400 | ((64 - (k)) << 16) | ((n) << 5) | (d))
+#define UQXTN2_8H(n, d) WORD $(0x6E614800 | ((n) << 5) | (d))
+#define UQXTN4H(n, d) WORD $(0x2E614800 | ((n) << 5) | (d))
+
 // upsampleNearestNeighborNEON performs a 2x2 nearest neighbor upsampling using NEON.
 // It processes 16 source bytes (one NEON register) per iteration.
 //
@@ -124,24 +130,24 @@ after_copy:
 	VUXTL V1.B8, V4.H8; VUXTL V4.H4, V10.S4; VUXTL2 V4.H8, V11.S4;  \
 	VUXTL V2.B8, V4.H8; VUXTL V4.H4, V12.S4; VUXTL2 V4.H8, V13.S4;  \
 	VUXTL V3.B8, V4.H8; VUXTL V4.H4, V14.S4; VUXTL2 V4.H8, V15.S4;  \
-	WORD $0x4EB09D15; WORD $0x4EB19D56; VADD V22.S4, V21.S4, V21.S4; \
-	WORD $0x4EB29D96; VADD V22.S4, V21.S4, V21.S4;                  \
-	WORD $0x4EB39DD6; VADD V22.S4, V21.S4, V21.S4; VADD V20.S4, V21.S4, V21.S4; \
-	WORD $0x4F3906B5;                                               \
-	WORD $0x4EB09D36; WORD $0x4EB19D77; VADD V23.S4, V22.S4, V22.S4; \
-	WORD $0x4EB29DB7; VADD V23.S4, V22.S4, V22.S4;                  \
-	WORD $0x4EB39DF7; VADD V23.S4, V22.S4, V22.S4; VADD V20.S4, V22.S4, V22.S4; \
-	WORD $0x4F3906D6;                                               \
-	WORD $0x2E614AA7; WORD $0x6E614AC7; WORD $0x2E2128E5;           \
-	WORD $0x4EB39D17; WORD $0x4EB29D58; VADD V24.S4, V23.S4, V23.S4; \
-	WORD $0x4EB19D98; VADD V24.S4, V23.S4, V23.S4;                  \
-	WORD $0x4EB09DD8; VADD V24.S4, V23.S4, V23.S4; VADD V20.S4, V23.S4, V23.S4; \
-	WORD $0x4F3906F7;                                               \
-	WORD $0x4EB39D38; WORD $0x4EB29D79; VADD V25.S4, V24.S4, V24.S4; \
-	WORD $0x4EB19DB9; VADD V25.S4, V24.S4, V24.S4;                  \
-	WORD $0x4EB09DF9; VADD V25.S4, V24.S4, V24.S4; VADD V20.S4, V24.S4, V24.S4; \
-	WORD $0x4F390718;                                               \
-	WORD $0x2E614AE7; WORD $0x6E614B07; WORD $0x2E2128E6
+	MUL4S(16, 8, 21); MUL4S(17, 10, 22); VADD V22.S4, V21.S4, V21.S4; \
+	MUL4S(18, 12, 22); VADD V22.S4, V21.S4, V21.S4;                  \
+	MUL4S(19, 14, 22); VADD V22.S4, V21.S4, V21.S4; VADD V20.S4, V21.S4, V21.S4; \
+	SSHR4S(7, 21, 21);                                               \
+	MUL4S(16, 9, 22); MUL4S(17, 11, 23); VADD V23.S4, V22.S4, V22.S4; \
+	MUL4S(18, 13, 23); VADD V23.S4, V22.S4, V22.S4;                  \
+	MUL4S(19, 15, 23); VADD V23.S4, V22.S4, V22.S4; VADD V20.S4, V22.S4, V22.S4; \
+	SSHR4S(7, 22, 22);                                               \
+	UQXTN4H(21, 7); UQXTN2_8H(22, 7); SQXTUN8B(7, 5);           \
+	MUL4S(19, 8, 23); MUL4S(18, 10, 24); VADD V24.S4, V23.S4, V23.S4; \
+	MUL4S(17, 12, 24); VADD V24.S4, V23.S4, V23.S4;                  \
+	MUL4S(16, 14, 24); VADD V24.S4, V23.S4, V23.S4; VADD V20.S4, V23.S4, V23.S4; \
+	SSHR4S(7, 23, 23);                                               \
+	MUL4S(19, 9, 24); MUL4S(18, 11, 25); VADD V25.S4, V24.S4, V24.S4; \
+	MUL4S(17, 13, 25); VADD V25.S4, V24.S4, V24.S4;                  \
+	MUL4S(16, 15, 25); VADD V25.S4, V24.S4, V24.S4; VADD V20.S4, V24.S4, V24.S4; \
+	SSHR4S(7, 24, 24);                                               \
+	UQXTN4H(23, 7); UQXTN2_8H(24, 7); SQXTUN8B(7, 6)
 
 // LOAD_COEFFS broadcasts the filter coefficients into V16-V20.
 #define LOAD_COEFFS() \

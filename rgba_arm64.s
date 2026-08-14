@@ -2,6 +2,12 @@
 
 #include "textflag.h"
 
+#define MUL4S(m, n, d) WORD $(0x4EA09C00 | ((m) << 16) | ((n) << 5) | (d))
+#define SQXTUN8B(n, d) WORD $(0x2E212800 | ((n) << 5) | (d))
+#define SSHR4S(k, n, d) WORD $(0x4F000400 | ((64 - (k)) << 16) | ((n) << 5) | (d))
+#define UQXTN2_8H(n, d) WORD $(0x6E614800 | ((n) << 5) | (d))
+#define UQXTN4H(n, d) WORD $(0x2E614800 | ((n) << 5) | (d))
+
 // NEON plane-to-RGBA conversions. Gray/RGB interleave via the VST4 structured
 // store; YCbCr does the JFIF fixed-point conversion in 32-bit lanes then narrows
 // with unsigned saturation. 32-bit VMUL/SSHR and UQXTN/SQXTUN are emitted as WORD
@@ -98,47 +104,47 @@ ycbcr_loop:
 	VSUB   V20.S4, V10.S4, V10.S4
 
 	// R = (yVal + 359*crVal + 128) >> 8, narrowed with unsigned saturation.
-	WORD $0x4EB09D2B            // VMUL V11.4S, V9.4S, V16.4S  (359*crLo)
-	WORD $0x4EB09D4C            // VMUL V12.4S, V10.4S, V16.4S (359*crHi)
+	MUL4S(16, 9, 11) // VMUL V11.4S, V9.4S, V16.4S  (359*crLo)
+	MUL4S(16, 10, 12) // VMUL V12.4S, V10.4S, V16.4S (359*crHi)
 	VADD V4.S4, V11.S4, V11.S4
 	VADD V5.S4, V12.S4, V12.S4
 	VADD V20.S4, V11.S4, V11.S4
 	VADD V20.S4, V12.S4, V12.S4
-	WORD $0x4F38056B            // SSHR V11.4S, V11.4S, #8
-	WORD $0x4F38058C            // SSHR V12.4S, V12.4S, #8
-	WORD $0x2E61496D            // UQXTN  V13.4H, V11.4S
-	WORD $0x6E61498D            // UQXTN2 V13.8H, V12.4S
-	WORD $0x2E2129A0            // SQXTUN V0.8B, V13.8H  (R)
+	SSHR4S(8, 11, 11)
+	SSHR4S(8, 12, 12)
+	UQXTN4H(11, 13)
+	UQXTN2_8H(12, 13)
+	SQXTUN8B(13, 0) // SQXTUN V0.8B, V13.8H  (R)
 
 	// B = (yVal + 454*cbVal + 128) >> 8.
-	WORD $0x4EB39CEB            // VMUL V11.4S, V7.4S, V19.4S  (454*cbLo)
-	WORD $0x4EB39D0C            // VMUL V12.4S, V8.4S, V19.4S  (454*cbHi)
+	MUL4S(19, 7, 11) // VMUL V11.4S, V7.4S, V19.4S  (454*cbLo)
+	MUL4S(19, 8, 12) // VMUL V12.4S, V8.4S, V19.4S  (454*cbHi)
 	VADD V4.S4, V11.S4, V11.S4
 	VADD V5.S4, V12.S4, V12.S4
 	VADD V20.S4, V11.S4, V11.S4
 	VADD V20.S4, V12.S4, V12.S4
-	WORD $0x4F38056B            // SSHR V11.4S, #8
-	WORD $0x4F38058C            // SSHR V12.4S, #8
-	WORD $0x2E61496D            // UQXTN  V13.4H, V11.4S
-	WORD $0x6E61498D            // UQXTN2 V13.8H, V12.4S
-	WORD $0x2E2129A2            // SQXTUN V2.8B, V13.8H  (B)
+	SSHR4S(8, 11, 11)
+	SSHR4S(8, 12, 12)
+	UQXTN4H(11, 13)
+	UQXTN2_8H(12, 13)
+	SQXTUN8B(13, 2) // SQXTUN V2.8B, V13.8H  (B)
 
 	// G = (yVal - 88*cbVal - 183*crVal + 128) >> 8.
-	WORD $0x4EB19CEB            // VMUL V11.4S, V7.4S, V17.4S  (88*cbLo)
-	WORD $0x4EB19D0C            // VMUL V12.4S, V8.4S, V17.4S  (88*cbHi)
-	WORD $0x4EB29D2D            // VMUL V13.4S, V9.4S, V18.4S  (183*crLo)
-	WORD $0x4EB29D4E            // VMUL V14.4S, V10.4S, V18.4S (183*crHi)
+	MUL4S(17, 7, 11) // VMUL V11.4S, V7.4S, V17.4S  (88*cbLo)
+	MUL4S(17, 8, 12) // VMUL V12.4S, V8.4S, V17.4S  (88*cbHi)
+	MUL4S(18, 9, 13) // VMUL V13.4S, V9.4S, V18.4S  (183*crLo)
+	MUL4S(18, 10, 14) // VMUL V14.4S, V10.4S, V18.4S (183*crHi)
 	VSUB V11.S4, V4.S4, V15.S4  // gLo = yValLo - 88*cbLo
 	VSUB V13.S4, V15.S4, V15.S4 // gLo -= 183*crLo
 	VADD V20.S4, V15.S4, V15.S4 // gLo += 128
 	VSUB V12.S4, V5.S4, V11.S4  // gHi = yValHi - 88*cbHi
 	VSUB V14.S4, V11.S4, V11.S4 // gHi -= 183*crHi
 	VADD V20.S4, V11.S4, V11.S4 // gHi += 128
-	WORD $0x4F3805EF            // SSHR V15.4S, #8 (gLo)
-	WORD $0x4F38056B            // SSHR V11.4S, #8 (gHi)
-	WORD $0x2E6149ED            // UQXTN  V13.4H, V15.4S
-	WORD $0x6E61496D            // UQXTN2 V13.8H, V11.4S
-	WORD $0x2E2129A1            // SQXTUN V1.8B, V13.8H  (G)
+	SSHR4S(8, 15, 15) // SSHR V15.4S, #8 (gLo)
+	SSHR4S(8, 11, 11) // SSHR V11.4S, #8 (gHi)
+	UQXTN4H(15, 13)
+	UQXTN2_8H(11, 13)
+	SQXTUN8B(13, 1) // SQXTUN V1.8B, V13.8H  (G)
 
 	// Interleave R,G,B with constant alpha and store 8 RGBA pixels.
 	VMOV   V21.B16, V3.B16
