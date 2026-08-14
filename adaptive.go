@@ -347,7 +347,7 @@ func blockModulations(block []byte, stride int) (float32, float32) {
 
 // absInt is branchless because it is applied to differences of random sign.
 func absInt(v int) int {
-	m := v >> 63
+	m := v >> (bits.UintSize - 1)
 
 	return (v ^ m) - m
 }

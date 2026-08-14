@@ -6,6 +6,7 @@ import (
 	"errors"
 	"image"
 	"io"
+	"math"
 )
 
 // component stores information about a single color component (e.g., Y, Cb, or Cr).
@@ -68,7 +69,7 @@ type errDecode struct{ error }
 
 // maxImagePixels caps the SOF pixel count to avoid huge allocations from corrupt
 // dimensions, while staying well above any real image (~268 megapixels).
-const maxImagePixels = 1 << 28
+const maxImagePixels = min(1<<28, math.MaxInt>>6)
 
 // Exif contains metadata extracted from a JPEG image's EXIF data.
 type Exif struct {
