@@ -144,17 +144,22 @@ func genOptimalTable(freq *[257]int32, bits *[17]uint8, values *[256]uint8) int 
 		v1, v2 := -1, -1
 		var least1, least2 int32
 
+		// The two least frequent symbols in one pass. Ties take the later
+		// index, which is what two separate scans with <= would have picked.
 		for i := 0; i <= 256; i++ {
-			if f[i] > 0 && (v1 < 0 || f[i] <= least1) {
-				least1 = f[i]
-				v1 = i
+			if f[i] <= 0 {
+				continue
 			}
-		}
 
-		for i := 0; i <= 256; i++ {
-			if f[i] > 0 && i != v1 && (v2 < 0 || f[i] <= least2) {
-				least2 = f[i]
-				v2 = i
+			if v1 < 0 || f[i] <= least1 {
+				v2, least2 = v1, least1
+				v1, least1 = i, f[i]
+
+				continue
+			}
+
+			if v2 < 0 || f[i] <= least2 {
+				v2, least2 = i, f[i]
 			}
 		}
 
