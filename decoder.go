@@ -1284,7 +1284,9 @@ markerLoop:
 		d.size -= consumedBytes
 
 		switch marker {
-		case 0xC0: // SOF0 (Start of Frame, Baseline DCT)
+		// SOF0 baseline, SOF1 extended sequential, and SOF9 arithmetic, which is
+		// attempted with Huffman tables rather than rejected.
+		case 0xC0, 0xC1, 0xC9:
 			if sofDecoded {
 				return nil, ErrSyntax
 			}
@@ -1311,25 +1313,6 @@ markerLoop:
 				return nil, err
 			}
 			sofDecoded = true
-			if configOnly {
-				break markerLoop
-			}
-
-		case 0xC9: // SOF9 (Extended sequential DCT, Arithmetic coding)
-			// Resilient decoding: treat as baseline and attempt Huffman decoding.
-			// Some images marked as arithmetic may still decode with Huffman tables.
-			if sofDecoded {
-				return nil, ErrSyntax
-			}
-
-			d.isBaseline = true
-			d.isProgressive = false
-
-			if err := d.decodeSOF(configOnly); err != nil {
-				return nil, err
-			}
-			sofDecoded = true
-
 			if configOnly {
 				break markerLoop
 			}
@@ -1434,8 +1417,8 @@ markerLoop:
 					continue
 				}
 
-				// Check for unsupported SOF markers (C1, C3, C5-C8, CA-CB, CD-CF).
-				// C0, C2, C9 (Supported) and C4 (DHT) are handled above.
+				// Unsupported SOF markers (C3, C5-C8, CA-CB, CD-CF); C0, C1, C2, C9
+				// and C4 (DHT) are handled above.
 				if marker >= 0xC0 && marker <= 0xCF {
 					if !sofDecoded {
 						// If this is the first SOF and it's unsupported, reject the image.

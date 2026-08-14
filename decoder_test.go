@@ -1142,6 +1142,63 @@ func TestDecode16BitDQT(t *testing.T) {
 	}
 }
 
+// patchSOF rewrites the frame marker of a baseline JPEG to sof.
+func patchSOF(t *testing.T, data []byte, sof byte) []byte {
+	t.Helper()
+
+	out := append([]byte(nil), data...)
+
+	for i := 2; i+3 < len(out); {
+		if out[i] != 0xFF {
+			break
+		}
+
+		if out[i+1] == 0xC0 {
+			out[i+1] = sof
+
+			return out
+		}
+
+		i += 2 + (int(out[i+2])<<8 | int(out[i+3]))
+	}
+
+	t.Fatalf("no SOF0 marker found")
+
+	return nil
+}
+
+// TestDecodeExtendedSequential decodes a SOF1 frame and checks it matches the SOF0 original.
+func TestDecodeExtendedSequential(t *testing.T) {
+	img, err := Decode(bytes.NewReader(patchSOF(t, test420, 0xC1)), &Options{ToRGBA: true})
+	if err != nil {
+		t.Fatalf("Decode failed for extended sequential image: %v", err)
+	}
+
+	ref, err := Decode(bytes.NewReader(test420), &Options{ToRGBA: true})
+	if err != nil {
+		t.Fatalf("Decode failed for baseline image: %v", err)
+	}
+
+	if img.Bounds() != ref.Bounds() {
+		t.Fatalf("bounds mismatch: got %v, want %v", img.Bounds(), ref.Bounds())
+	}
+
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if img.At(x, y) != ref.At(x, y) {
+				t.Fatalf("pixel (%d,%d) differs between SOF1 and SOF0 decode", x, y)
+			}
+		}
+	}
+
+	for _, sof := range []byte{0xC3, 0xC5, 0xC6, 0xC7, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF} {
+		if _, err := Decode(bytes.NewReader(patchSOF(t, test420, sof))); err == nil {
+			t.Errorf("SOF %#x: decoded, want an error", sof)
+		}
+	}
+}
+
 // TestDecodeSmallSubsampled decodes chroma planes below three samples.
 func TestDecodeSmallSubsampled(t *testing.T) {
 	cases := []struct {
