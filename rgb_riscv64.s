@@ -1,0 +1,81 @@
+//go:build riscv64 && riscv64.rva23u64 && !noasm
+
+#include "textflag.h"
+
+// RVV packed RGB to YCbCr planes, bit-identical to rgbToYCbCrRowScalar. The
+// segment load splits the four byte stride into planes, and the vector length
+// clamps itself to the row, so there is no tail.
+
+// func rgbToYCbCrRowRVV(dstY, dstCb, dstCr, src *byte, n int)
+TEXT ·rgbToYCbCrRowRVV(SB), NOSPLIT, $0-40
+	MOV dstY+0(FP), X10
+	MOV dstCb+8(FP), X11
+	MOV dstCr+16(FP), X12
+	MOV src+24(FP), X13
+	MOV n+32(FP), X14
+
+	MOV $19595, X16
+	MOV $38470, X17
+	MOV $7471, X18
+	MOV $-11056, X19
+	MOV $-21712, X20
+	MOV $32768, X21
+	MOV $-27440, X22
+	MOV $-5328, X23
+	MOV $32768, X24
+	MOV $8421376, X25
+	MOV $255, X26
+
+loop:
+	VSETVLI   X14, E8, M1, TA, MA, X15
+	VLSEG4E8V (X13), V0
+
+	VSETVLI  X14, E32, M4, TA, MA, X15
+	VZEXTVF4 V0, V8
+	VZEXTVF4 V1, V12
+	VZEXTVF4 V2, V16
+
+	VMVVX   X24, V20
+	VMACCVX V8, X16, V20
+	VMACCVX V12, X17, V20
+	VMACCVX V16, X18, V20
+	VSRAVI  $16, V20, V20
+
+	VMVVX   X25, V24
+	VMACCVX V8, X19, V24
+	VMACCVX V12, X20, V24
+	VMACCVX V16, X21, V24
+	VSRAVI  $16, V24, V24
+	VMAXVX  X0, V24, V24
+	VMINVX  X26, V24, V24
+
+	VMVVX   X25, V28
+	VMACCVX V8, X21, V28
+	VMACCVX V12, X22, V28
+	VMACCVX V16, X23, V28
+	VSRAVI  $16, V28, V28
+	VMAXVX  X0, V28, V28
+	VMINVX  X26, V28, V28
+
+	VSETVLI X14, E16, M2, TA, MA, X15
+	VNSRLWI $0, V20, V4
+	VNSRLWI $0, V24, V6
+	VNSRLWI $0, V28, V2
+
+	VSETVLI X14, E8, M1, TA, MA, X15
+	VNSRLWI $0, V4, V0
+	VSE8V   V0, (X10)
+	VNSRLWI $0, V6, V0
+	VSE8V   V0, (X11)
+	VNSRLWI $0, V2, V0
+	VSE8V   V0, (X12)
+
+	ADD  X15, X10, X10
+	ADD  X15, X11, X11
+	ADD  X15, X12, X12
+	SLLI $2, X15, X28
+	ADD  X28, X13, X13
+	SUB  X15, X14, X14
+	BNE  X0, X14, loop
+
+	RET
