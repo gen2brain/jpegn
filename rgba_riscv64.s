@@ -1,0 +1,135 @@
+//go:build riscv64 && riscv64.rva23u64 && !noasm
+
+#include "textflag.h"
+
+// RVV YCbCr to RGBA, bit-identical to yCbCrToRGBAScalar. The segment store
+// interleaves the four channels, and the vector length clamps itself to the
+// row, so there is no tail.
+
+// func yCbCrToRGBARowRVV(dst, y, cb, cr *byte, n int)
+TEXT ·yCbCrToRGBARowRVV(SB), NOSPLIT, $0-40
+	MOV dst+0(FP), X10
+	MOV y+8(FP), X11
+	MOV cb+16(FP), X12
+	MOV cr+24(FP), X13
+	MOV n+32(FP), X14
+
+	MOV $-128, X16
+	MOV $359, X17
+	MOV $-88, X18
+	MOV $-183, X19
+	MOV $454, X20
+	MOV $128, X21
+	MOV $255, X22
+
+loop:
+	VSETVLI X14, E8, M1, TA, MA, X15
+	VLE8V   (X11), V0
+	VLE8V   (X12), V1
+	VLE8V   (X13), V2
+
+	VSETVLI  X14, E32, M4, TA, MA, X15
+	VZEXTVF4 V0, V8
+	VZEXTVF4 V1, V12
+	VZEXTVF4 V2, V16
+	VSLLVI   $8, V8, V8
+	VADDVX   X16, V12, V12
+	VADDVX   X16, V16, V16
+
+	VMVVX   X21, V20
+	VADDVV  V8, V20, V20
+	VMACCVX V16, X17, V20
+	VSRAVI  $8, V20, V20
+	VMAXVX  X0, V20, V20
+	VMINVX  X22, V20, V20
+
+	VMVVX   X21, V24
+	VADDVV  V8, V24, V24
+	VMACCVX V12, X18, V24
+	VMACCVX V16, X19, V24
+	VSRAVI  $8, V24, V24
+	VMAXVX  X0, V24, V24
+	VMINVX  X22, V24, V24
+
+	VMVVX   X21, V28
+	VADDVV  V8, V28, V28
+	VMACCVX V12, X20, V28
+	VSRAVI  $8, V28, V28
+	VMAXVX  X0, V28, V28
+	VMINVX  X22, V28, V28
+
+	VSETVLI X14, E16, M2, TA, MA, X15
+	VNSRLWI $0, V20, V4
+	VNSRLWI $0, V24, V6
+	VNSRLWI $0, V28, V16
+
+	VSETVLI   X14, E8, M1, TA, MA, X15
+	VNSRLWI   $0, V4, V0
+	VNSRLWI   $0, V6, V1
+	VNSRLWI   $0, V16, V2
+	VMVVX     X22, V3
+	VSSEG4E8V V0, (X10)
+
+	ADD  X15, X11, X11
+	ADD  X15, X12, X12
+	ADD  X15, X13, X13
+	SLLI $2, X15, X28
+	ADD  X28, X10, X10
+	SUB  X15, X14, X14
+	BNE  X0, X14, loop
+
+	RET
+
+// func rgbToRGBARowRVV(dst, sr, sg, sb *byte, n int)
+TEXT ·rgbToRGBARowRVV(SB), NOSPLIT, $0-40
+	MOV dst+0(FP), X10
+	MOV sr+8(FP), X11
+	MOV sg+16(FP), X12
+	MOV sb+24(FP), X13
+	MOV n+32(FP), X14
+
+	MOV $255, X22
+
+loop2:
+	VSETVLI X14, E8, M2, TA, MA, X15
+	VLE8V   (X11), V0
+	VLE8V   (X12), V2
+	VLE8V   (X13), V4
+	VMVVX   X22, V6
+
+	VSSEG4E8V V0, (X10)
+
+	ADD  X15, X11, X11
+	ADD  X15, X12, X12
+	ADD  X15, X13, X13
+	SLLI $2, X15, X28
+	ADD  X28, X10, X10
+	SUB  X15, X14, X14
+	BNE  X0, X14, loop2
+
+	RET
+
+// func grayToRGBARowRVV(dst, gray *byte, n int)
+TEXT ·grayToRGBARowRVV(SB), NOSPLIT, $0-24
+	MOV dst+0(FP), X10
+	MOV gray+8(FP), X11
+	MOV n+16(FP), X14
+
+	MOV $255, X22
+
+loop3:
+	VSETVLI X14, E8, M2, TA, MA, X15
+	VLE8V   (X11), V0
+	VMVVV   V0, V2
+	VMVVV   V0, V4
+	VMVVX   X22, V6
+
+	VSSEG4E8V V0, (X10)
+
+	ADD  X15, X11, X11
+	SLLI $2, X15, X28
+	ADD  X28, X10, X10
+	SUB  X15, X14, X14
+	BNE  X0, X14, loop3
+
+	RET
