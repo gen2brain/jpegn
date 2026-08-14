@@ -5,7 +5,9 @@ import (
 	"embed"
 	"image"
 	"image/jpeg"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +32,36 @@ func addFuzzCorpus(f *testing.F) {
 
 		// Add the file content to the seed corpus.
 		f.Add(data)
+	}
+
+	addConformanceCorpus(f)
+}
+
+// addConformanceCorpus seeds from the corpora named by CONFORMANCE_DIR, whose
+// crash reproducers are far better fuzz seeds than the embedded testdata.
+func addConformanceCorpus(f *testing.F) {
+	f.Helper()
+
+	env := os.Getenv("CONFORMANCE_DIR")
+	if env == "" {
+		return
+	}
+
+	for _, dir := range strings.Split(env, ":") {
+		_ = filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
+			if err != nil || fi.IsDir() || fi.Size() > 1<<20 {
+				return nil //nolint:nilerr
+			}
+
+			switch strings.ToLower(filepath.Ext(p)) {
+			case ".jpg", ".jpeg":
+				if data, err := os.ReadFile(p); err == nil {
+					f.Add(data)
+				}
+			}
+
+			return nil
+		})
 	}
 }
 

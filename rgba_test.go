@@ -347,3 +347,40 @@ func BenchmarkGrayToRGBA(b *testing.B) {
 		grayToRGBA(c, dst, w, h)
 	}
 }
+
+// TestYCbCrToRGBAExhaustive checks every YCbCr triple through the row kernel.
+// The forward direction already has this in rgb_test.go; the inverse is the one
+// that clamps at both rails.
+func TestYCbCrToRGBAExhaustive(t *testing.T) {
+	const n = 256
+
+	mk := func() *component {
+		return &component{pixels: make([]byte, n), stride: n, width: n, height: 1}
+	}
+
+	y, cb, cr := mk(), mk(), mk()
+	got := make([]byte, n*4)
+	want := make([]byte, n*4)
+
+	for a := 0; a < 256; a++ {
+		for b := 0; b < 256; b++ {
+			for i := 0; i < n; i++ {
+				y.pixels[i] = byte(a)
+				cb.pixels[i] = byte(b)
+				cr.pixels[i] = byte(i)
+			}
+
+			yCbCrToRGBA(y, cb, cr, got, n, 1)
+			yCbCrToRGBAScalar(y, cb, cr, want, n, 1)
+
+			if !bytes.Equal(got, want) {
+				for i := 0; i < n; i++ {
+					if !bytes.Equal(got[i*4:i*4+4], want[i*4:i*4+4]) {
+						t.Fatalf("Y=%d Cb=%d Cr=%d: got %v, want %v",
+							a, b, i, got[i*4:i*4+4], want[i*4:i*4+4])
+					}
+				}
+			}
+		}
+	}
+}
