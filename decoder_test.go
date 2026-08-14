@@ -20,6 +20,12 @@ var test420o []byte
 //go:embed testdata/test.420.odd.jpg
 var test420odd []byte
 
+//go:embed testdata/test.420.noninterleaved.jpg
+var test420NonInterleaved []byte
+
+//go:embed testdata/test.420.interleaved.jpg
+var test420Interleaved []byte
+
 //go:embed testdata/test.420.progressive.odd.jpg
 var test420progOdd []byte
 
@@ -1139,6 +1145,54 @@ func TestDecode16BitDQT(t *testing.T) {
 				t.Fatalf("pixel (%d,%d) differs between 16-bit and 8-bit DQT decode", x, y)
 			}
 		}
+	}
+}
+
+// TestDecodeNonInterleaved decodes a baseline image whose three components each
+// occupy their own scan, and checks it against the interleaved encoding of the
+// same source. The 69x53 size leaves the luma component a padding block column
+// and row that only the interleaved scan carries.
+func TestDecodeNonInterleaved(t *testing.T) {
+	got, err := Decode(bytes.NewReader(test420NonInterleaved))
+	if err != nil {
+		t.Fatalf("Decode failed for non-interleaved image: %v", err)
+	}
+
+	want, err := Decode(bytes.NewReader(test420Interleaved))
+	if err != nil {
+		t.Fatalf("Decode failed for interleaved image: %v", err)
+	}
+
+	if got.Bounds() != want.Bounds() {
+		t.Fatalf("bounds mismatch: got %v, want %v", got.Bounds(), want.Bounds())
+	}
+
+	ycc, ok := got.(*image.YCbCr)
+	if !ok {
+		t.Fatalf("got %T, want *image.YCbCr", got)
+	}
+
+	if ycc.SubsampleRatio != image.YCbCrSubsampleRatio420 {
+		t.Fatalf("subsample ratio %v, want 4:2:0", ycc.SubsampleRatio)
+	}
+
+	var nonZero bool
+
+	b := got.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if got.At(x, y) != want.At(x, y) {
+				t.Fatalf("pixel (%d,%d): got %v, want %v", x, y, got.At(x, y), want.At(x, y))
+			}
+
+			if cb, cr := ycc.Cb[ycc.COffset(x, y)], ycc.Cr[ycc.COffset(x, y)]; cb != 0 || cr != 0 {
+				nonZero = true
+			}
+		}
+	}
+
+	if !nonZero {
+		t.Fatal("chroma planes are empty, the later scans were skipped")
 	}
 }
 

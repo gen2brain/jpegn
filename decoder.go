@@ -49,6 +49,7 @@ type decoder struct {
 	subsampleRatio      image.YCbCrSubsampleRatio // The detected YCbCr subsampling ratio.
 	isRGB               bool                      // True if the image is encoded as RGB instead of YCbCr.
 	isBaseline          bool                      // True if the image is a baseline JPEG.
+	scanned             uint                      // Bitmask of components a baseline scan has covered.
 	isProgressive       bool                      // True if the image is a progressive JPEG.
 	upsampleMethod      UpsampleMethod            // The upsampling method to use.
 	toRGBA              bool                      // Whether to convert the final image to RGBA.
@@ -1374,8 +1375,9 @@ markerLoop:
 
 			scansCompleted++
 
-			if d.isBaseline {
-				// Baseline has a single scan.
+			// Baseline is done once every component has been covered; a
+			// non-interleaved image spends one scan on each.
+			if d.isBaseline && d.scanned == 1<<uint(d.ncomp)-1 {
 				break markerLoop
 			}
 

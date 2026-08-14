@@ -207,10 +207,6 @@ func (d *decoder) decodeScanInternal() error {
 			return ErrUnsupported
 		}
 
-		if d.ncomp > 1 && nCompScan != d.ncomp {
-			return ErrUnsupported
-		}
-
 		return d.decodeScanBaseline(nCompScan, scanComp)
 	}
 
@@ -393,31 +389,53 @@ func (d *decoder) decodeScanBaseline(nCompScan int, scanComp [4]int) error {
 	// Reset EOB run for baseline.
 	d.eobRun = 0
 
+	for i := 0; i < nCompScan; i++ {
+		d.scanned |= 1 << uint(scanComp[i])
+	}
+
 	// Calculate output block dimensions based on scaling
 	outBlockW := 8 / d.scaleDenom
 	outBlockH := 8 / d.scaleDenom
 
-	decodeMCU := func(mbx, mby int) {
-		for i := 0; i < nCompScan; i++ {
-			c := &d.comp[scanComp[i]]
+	var total int
 
-			for sby := 0; sby < c.ssY; sby++ {
-				for sbx := 0; sbx < c.ssX; sbx++ {
-					rowStart := (mby*c.ssY + sby) * outBlockH * c.stride
-					colStart := (mbx*c.ssX + sbx) * outBlockW
-					d.decodeBlock(c, rowStart+colStart)
+	var decodeUnit func(i int)
+
+	if nCompScan == 1 {
+		// Non-interleaved: the component's own block raster, without the MCU
+		// padding, addressed through the padded stride.
+		c := &d.comp[scanComp[0]]
+		total = c.blocksPerLine * c.blocksPerCol
+
+		decodeUnit = func(i int) {
+			by, bx := i/c.blocksPerLine, i%c.blocksPerLine
+			d.decodeBlock(c, by*outBlockH*c.stride+bx*outBlockW)
+		}
+	} else {
+		total = d.mbWidth * d.mbHeight
+
+		decodeUnit = func(i int) {
+			mbx, mby := i%d.mbWidth, i/d.mbWidth
+
+			for k := 0; k < nCompScan; k++ {
+				c := &d.comp[scanComp[k]]
+
+				for sby := 0; sby < c.ssY; sby++ {
+					for sbx := 0; sbx < c.ssX; sbx++ {
+						rowStart := (mby*c.ssY + sby) * outBlockH * c.stride
+						colStart := (mbx*c.ssX + sbx) * outBlockW
+						d.decodeBlock(c, rowStart+colStart)
+					}
 				}
 			}
 		}
 	}
 
 	if d.rstInterval > 0 {
-		d.decodeScanBaselineRestart(decodeMCU)
+		d.decodeScanBaselineRestart(total, decodeUnit)
 	} else {
-		for mby := 0; mby < d.mbHeight; mby++ {
-			for mbx := 0; mbx < d.mbWidth; mbx++ {
-				decodeMCU(mbx, mby)
-			}
+		for i := 0; i < total; i++ {
+			decodeUnit(i)
 		}
 	}
 
@@ -428,8 +446,7 @@ func (d *decoder) decodeScanBaseline(nCompScan int, scanComp [4]int) error {
 }
 
 // decodeScanBaselineRestart decodes a baseline scan with restart intervals, resyncing on corruption.
-func (d *decoder) decodeScanBaselineRestart(decodeMCU func(mbx, mby int)) {
-	total := d.mbWidth * d.mbHeight
+func (d *decoder) decodeScanBaselineRestart(total int, decodeUnit func(i int)) {
 	nextRst := 0
 
 	for mcu := 0; mcu < total; {
@@ -438,7 +455,7 @@ func (d *decoder) decodeScanBaselineRestart(decodeMCU func(mbx, mby int)) {
 			end = total
 		}
 
-		mcu = d.decodeBaselineInterval(mcu, end, decodeMCU)
+		mcu = d.decodeBaselineInterval(mcu, end, decodeUnit)
 		if mcu >= total {
 			break
 		}
@@ -451,7 +468,7 @@ func (d *decoder) decodeScanBaselineRestart(decodeMCU func(mbx, mby int)) {
 
 // decodeBaselineInterval decodes MCUs [start, end), recovering from an entropy
 // error by abandoning the rest of the interval. It returns the next MCU index.
-func (d *decoder) decodeBaselineInterval(start, end int, decodeMCU func(mbx, mby int)) (next int) {
+func (d *decoder) decodeBaselineInterval(start, end int, decodeUnit func(i int)) (next int) {
 	defer func() {
 		if r := recover(); r != nil {
 			if _, ok := r.(errDecode); ok {
@@ -464,8 +481,8 @@ func (d *decoder) decodeBaselineInterval(start, end int, decodeMCU func(mbx, mby
 		}
 	}()
 
-	for mcu := start; mcu < end; mcu++ {
-		decodeMCU(mcu%d.mbWidth, mcu/d.mbWidth)
+	for i := start; i < end; i++ {
+		decodeUnit(i)
 	}
 
 	return end
