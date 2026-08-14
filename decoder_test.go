@@ -1370,7 +1370,8 @@ func TestDecodeSmallSubsampled(t *testing.T) {
 	}
 }
 
-// conformanceDirs returns the corpora named by CONFORMANCE_DIR, colon separated.
+// conformanceDirs returns the corpora named by CONFORMANCE_DIR, separated by the
+// platform's list separator.
 func conformanceDirs(t *testing.T) []string {
 	t.Helper()
 
@@ -1379,7 +1380,7 @@ func conformanceDirs(t *testing.T) []string {
 		t.Skip("set CONFORMANCE_DIR")
 	}
 
-	return strings.Split(env, ":")
+	return filepath.SplitList(env)
 }
 
 // conformanceRoot returns the corpus holding the JPEG suite.

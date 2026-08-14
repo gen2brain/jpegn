@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/jpeg"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,10 +25,13 @@ func addFuzzCorpus(f *testing.F) {
 	}
 
 	for _, file := range files {
-		path := filepath.Join("testdata", file.Name())
-		data, err := fuzzCorpus.ReadFile(path)
+		// embed.FS is always slash separated, so filepath.Join would build a
+		// name with backslashes on Windows and never match.
+		name := path.Join("testdata", file.Name())
+
+		data, err := fuzzCorpus.ReadFile(name)
 		if err != nil {
-			f.Fatalf("failed to read embedded file %s: %v", path, err)
+			f.Fatalf("failed to read embedded file %s: %v", name, err)
 		}
 
 		// Add the file content to the seed corpus.
@@ -47,7 +51,7 @@ func addConformanceCorpus(f *testing.F) {
 		return
 	}
 
-	for _, dir := range strings.Split(env, ":") {
+	for _, dir := range filepath.SplitList(env) {
 		_ = filepath.Walk(dir, func(p string, fi os.FileInfo, err error) error {
 			if err != nil || fi.IsDir() || fi.Size() > 1<<20 {
 				return nil //nolint:nilerr
