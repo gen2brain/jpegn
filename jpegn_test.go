@@ -125,6 +125,7 @@ func FuzzEncode(f *testing.F) {
 		}
 
 		prog := sub/6&1 == 1
+		adaptive := sub/12&1 == 1
 
 		opts := &EncodeOptions{
 			Quality:         int(quality)%101 + 1,
@@ -132,6 +133,8 @@ func FuzzEncode(f *testing.F) {
 			OptimizeCoding:  optimize,
 			Progressive:     prog,
 			RestartInterval: int(rst),
+
+			AdaptiveQuantization: adaptive,
 		}
 
 		var buf bytes.Buffer

@@ -704,6 +704,12 @@ func BenchmarkEncodeRGBA420Progressive(b *testing.B) {
 	benchEncode(b, photoRGBA(b), &EncodeOptions{Quality: 75, Subsampling: Subsample420, Progressive: true})
 }
 
+func BenchmarkEncodeRGBA420Adaptive(b *testing.B) {
+	benchEncode(b, photoRGBA(b), &EncodeOptions{
+		Quality: 75, Subsampling: Subsample420, OptimizeCoding: true, AdaptiveQuantization: true,
+	})
+}
+
 // TestEncodeSizeTable reports compressed size against stdlib.
 func TestEncodeSizeTable(t *testing.T) {
 	photo := photoRGBA(t)
@@ -828,19 +834,27 @@ func TestEncodeStable(t *testing.T) {
 		q    int
 		prog bool
 		rst  int
+		aq   bool
 		want string
 	}{
-		{Subsample444, 75, false, 0, "03dafaf1b8be26adadd5a662d72af73d392683c395558c6878ffd8bd0677c0fe"},
-		{Subsample444, 75, true, 0, "e39a78dad44a8f5ab1db6b4c208baec12ad89359021aead2aa9fc201f51f3aec"},
-		{Subsample422, 75, false, 0, "cd6050ab89afe5dda3f91c669bd930389c39b6bc44a0415cf4356b02cc4a5836"},
-		{Subsample422, 75, true, 0, "33784848849fa5e77b8aa3c4cc699727b7a9cc9faa5914346ab468a25470458f"},
-		{Subsample440, 75, false, 0, "2c3c9399abba30ad4955314552d3103fdecb47cefdc0b44ee5884f7489989166"},
-		{Subsample440, 75, true, 0, "aecf009a37fa5e7d84ad455c60b3d39adb5c5aff014e91bf094897afb75efa3e"},
-		{Subsample420, 75, false, 0, "3e9c0f9c6fa27fd0a4a7b50284a906401c7fd5754554a9e48c2e8604a546aac0"},
-		{Subsample420, 75, true, 0, "c50e70f1f66e69bacded5c08e10f09e5f859474e5c66e45448831eb755655648"},
-		{SubsampleGray, 75, false, 0, "34989570baa850dcf2476ec302eaa65ea84dce23f43b8847c4ffad19c7c72983"},
-		{SubsampleGray, 75, true, 0, "726e9a340bf4038660595f64afc6a9924bfcf376b976b0a17ec3710cab207679"},
-		{Subsample420, 90, true, 7, "d562651562eec7470c05ee617c189ef6caffb38e85c8ff552ff3a10713d9b055"},
+		{Subsample444, 75, false, 0, false, "03dafaf1b8be26adadd5a662d72af73d392683c395558c6878ffd8bd0677c0fe"},
+		{Subsample444, 75, true, 0, false, "e39a78dad44a8f5ab1db6b4c208baec12ad89359021aead2aa9fc201f51f3aec"},
+		{Subsample422, 75, false, 0, false, "cd6050ab89afe5dda3f91c669bd930389c39b6bc44a0415cf4356b02cc4a5836"},
+		{Subsample422, 75, true, 0, false, "33784848849fa5e77b8aa3c4cc699727b7a9cc9faa5914346ab468a25470458f"},
+		{Subsample440, 75, false, 0, false, "2c3c9399abba30ad4955314552d3103fdecb47cefdc0b44ee5884f7489989166"},
+		{Subsample440, 75, true, 0, false, "aecf009a37fa5e7d84ad455c60b3d39adb5c5aff014e91bf094897afb75efa3e"},
+		{Subsample420, 75, false, 0, false, "3e9c0f9c6fa27fd0a4a7b50284a906401c7fd5754554a9e48c2e8604a546aac0"},
+		{Subsample420, 75, true, 0, false, "c50e70f1f66e69bacded5c08e10f09e5f859474e5c66e45448831eb755655648"},
+		{SubsampleGray, 75, false, 0, false, "34989570baa850dcf2476ec302eaa65ea84dce23f43b8847c4ffad19c7c72983"},
+		{SubsampleGray, 75, true, 0, false, "726e9a340bf4038660595f64afc6a9924bfcf376b976b0a17ec3710cab207679"},
+		{Subsample420, 90, true, 7, false, "d562651562eec7470c05ee617c189ef6caffb38e85c8ff552ff3a10713d9b055"},
+		{Subsample444, 75, false, 0, true, "b82adf7655c706ed4480e8fc238239eb9d123545befdb6b921b661e18f388c37"},
+		{Subsample444, 75, true, 0, true, "592808c6e074a0be07ed82eb9fe0167032a9caab24b604fb4f3f11a28d48eee8"},
+		{Subsample420, 75, false, 0, true, "35bc6fb7c6f5051cc780eeabb8ac3af5c451586806e39530166d3da4224d5116"},
+		{Subsample420, 75, true, 0, true, "34cf37abbcb623b189a6ac1e47f4b14bb9581805c92b652e12e9adaa485cfef3"},
+		{SubsampleGray, 75, false, 0, true, "b59bf9c84359625b2f7179d2fa9fe9da415cb2a86538974f175e43d3e5741a96"},
+		{SubsampleGray, 75, true, 0, true, "96d8946ac227e9ce34cef52323a407e477779623f55c8bbf069d12a5fe6b4c18"},
+		{Subsample422, 40, false, 0, true, "bcd6040c0d0124fd889e88d36bf7146e8732a00af3480031df80a55013255b6d"},
 	}
 
 	src := synthImage(129, 71)
@@ -849,11 +863,12 @@ func TestEncodeStable(t *testing.T) {
 		data := encodeToBytes(t, src, &EncodeOptions{
 			Quality: tc.q, Subsampling: tc.sub, Progressive: tc.prog,
 			OptimizeCoding: !tc.prog, RestartInterval: tc.rst,
+			AdaptiveQuantization: tc.aq,
 		})
 
 		if got := fmt.Sprintf("%x", sha256.Sum256(data)); got != tc.want {
-			t.Errorf("sub %d q%d prog=%v rst%d: %s, want %s",
-				tc.sub, tc.q, tc.prog, tc.rst, got, tc.want)
+			t.Errorf("sub %d q%d prog=%v rst%d aq=%v: %s, want %s",
+				tc.sub, tc.q, tc.prog, tc.rst, tc.aq, got, tc.want)
 		}
 	}
 }

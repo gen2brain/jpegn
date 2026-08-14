@@ -82,6 +82,8 @@ type EncodeOptions struct {
 	OptimizeCoding bool
 	// Progressive writes a progressive JPEG.
 	Progressive bool
+	// AdaptiveQuantization drops coefficients the eye is least likely to miss.
+	AdaptiveQuantization bool
 	// RestartInterval is the MCU count between restart markers; zero disables them.
 	RestartInterval int
 	// Exif is a raw APP1 payload from [RawExif]; it replaces the JFIF APP0 segment.
@@ -127,6 +129,7 @@ type encComponent struct {
 	width        int
 	height       int
 
+	hf, vf             int
 	coeffs             []int32
 	masks              []uint64
 	nBlocksX, nBlocksY int
@@ -168,6 +171,11 @@ type encoder struct {
 	rowBuf        []byte
 	chromaBuf     []byte
 	progressive   bool
+	adaptive      bool
+	aq            aqField
+	qmulF         [2][64]float32
+	zeroBiasMul   [3][64]float32
+	zeroBiasOff   [3][64]float32
 	scans         []progScan
 	sentBits      [2][2][17]uint8
 	sentVals      [2][2][256]uint8
@@ -197,6 +205,7 @@ func Encode(w io.Writer, m image.Image, opts ...*EncodeOptions) error {
 	sub := SubsampleAuto
 	optimize := false
 	prog := false
+	adaptive := false
 	rst := 0
 
 	var exif []byte
@@ -227,6 +236,7 @@ func Encode(w io.Writer, m image.Image, opts ...*EncodeOptions) error {
 		sub = opts[0].Subsampling
 		optimize = opts[0].OptimizeCoding
 		prog = opts[0].Progressive
+		adaptive = opts[0].AdaptiveQuantization
 
 		if opts[0].RestartInterval > 0 {
 			rst = min(opts[0].RestartInterval, 65535)
@@ -245,7 +255,7 @@ func Encode(w io.Writer, m image.Image, opts ...*EncodeOptions) error {
 	e.exif = exif
 	e.segments = segments
 
-	if err := e.encode(m, quality, sub, optimize, prog, rst); err != nil {
+	if err := e.encode(m, quality, sub, optimize, prog, adaptive, rst); err != nil {
 		return err
 	}
 
@@ -255,7 +265,7 @@ func Encode(w io.Writer, m image.Image, opts ...*EncodeOptions) error {
 }
 
 // encode runs the full compression pipeline into e.out.
-func (e *encoder) encode(m image.Image, quality int, sub Subsampling, optimize, prog bool, rst int) error {
+func (e *encoder) encode(m image.Image, quality int, sub Subsampling, optimize, prog, adaptive bool, rst int) error {
 	b := m.Bounds()
 
 	e.out = e.out[:0]
@@ -265,6 +275,7 @@ func (e *encoder) encode(m image.Image, quality int, sub Subsampling, optimize, 
 	e.height = b.Dy()
 	e.rst = rst
 	e.progressive = prog
+	e.adaptive = adaptive
 
 	e.setSampling(resolveSampling(m, sub))
 
@@ -273,6 +284,11 @@ func (e *encoder) encode(m image.Image, quality int, sub Subsampling, optimize, 
 
 	e.buildQuant(quality)
 	e.buildPlanes(m)
+
+	if adaptive {
+		e.buildZeroBias(quality)
+		e.buildQuantField()
+	}
 
 	if prog {
 		e.encodeProgressive()
@@ -328,6 +344,7 @@ func (e *encoder) setComp(i, id, ssX, ssY, sel int) {
 	c := &e.comp[i]
 	c.id = id
 	c.ssX, c.ssY = ssX, ssY
+	c.hf, c.vf = e.hmax/ssX, e.vmax/ssY
 	c.qtSel, c.dcSel, c.acSel = sel, sel, sel
 	c.pred = 0
 }
@@ -712,7 +729,12 @@ func (e *encoder) encodeBlock(ci, bx, by int) {
 
 	fdct(blk, c.plane[by*8*c.stride+bx*8:], c.stride)
 
-	e.encodeCoeffs(zb, c, quantizeBlock(zb, blk, &e.qrecip[c.qtSel], &e.qhalf[c.qtSel]))
+	nz := quantizeBlock(zb, blk, &e.qrecip[c.qtSel], &e.qhalf[c.qtSel])
+	if e.adaptive {
+		nz = e.applyDeadZone(zb, blk, nz, ci, e.aqStrength(ci, bx, by))
+	}
+
+	e.encodeCoeffs(zb, c, nz)
 }
 
 // encodeCoeffs codes one block of quantized coefficients. nz marks the non-zero
@@ -898,6 +920,9 @@ func (e *encoder) buildCoeffs() {
 				fdct(&e.blk, c.plane[by*8*c.stride+bx*8:], c.stride)
 
 				nz := quantizeBlock(&e.zblk, &e.blk, recip, half)
+				if e.adaptive {
+					nz = e.applyDeadZone(&e.zblk, &e.blk, nz, ci, e.aqStrength(ci, bx, by))
+				}
 
 				dst := c.coeffs[off : off+64 : off+64]
 				clear(dst)
