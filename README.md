@@ -16,9 +16,9 @@ img, err := jpegn.Decode(r)
 ```
 
 `jpegn.Decode` returns the image in its native color space, `*image.YCbCr`, `*image.Gray`,
-`*image.CMYK` or `*image.RGBA`, and registers itself with `image.RegisterFormat`. `Options`
-forces RGBA output, selects the chroma upsampling filter, applies the EXIF orientation, and
-scales by 1/2, 1/4 or 1/8 during the inverse transform.
+`*image.CMYK` or `*image.RGBA`, and registers itself with `image.RegisterFormat`. It can also
+force RGBA output, pick the chroma upsampling filter, apply the EXIF orientation, and scale by
+1/2, 1/4 or 1/8 inside the inverse transform, which costs less than a full decode.
 
 ### Encoding
 
@@ -26,10 +26,10 @@ scales by 1/2, 1/4 or 1/8 during the inverse transform.
 err := jpegn.Encode(w, img, &jpegn.EncodeOptions{Quality: 90})
 ```
 
-`EncodeOptions` selects the chroma subsampling, optimized Huffman tables and restart intervals.
-Subsampling follows the source by default, so an `image.YCbCr` keeps its native ratio and its
-planes are encoded without resampling. `RawExif` and `Segments` carry EXIF and anything else,
-such as an ICC profile, through a decode and re-encode.
+Subsampling follows the source, so an `image.YCbCr` keeps its native ratio and its planes are
+encoded without resampling. Progressive mode, optimized Huffman tables, adaptive quantization
+and restart intervals are all opt-in, and EXIF and anything else, such as an ICC profile,
+carry through a decode and re-encode.
 
 ### Supported
 
@@ -37,10 +37,12 @@ The decoder reads baseline and progressive JPEG, 8-bit, grayscale, YCbCr, RGB, C
 any power-of-two subsampling, and restart intervals. Truncated or corrupt scan data decodes as
 far as it goes rather than failing. Arithmetic coding and 12-bit samples are refused.
 
-The encoder writes baseline JPEG, grayscale or YCbCr, at 4:4:4, 4:4:0, 4:2:2 or 4:2:0. Files are
-within 0.2% of the standard library at the same quality and subsampling, and identical to
-libjpeg-turbo at quality 50; optimized Huffman tables save ~4% at quality 50, rising to ~20% at
-quality 95.
+The encoder writes baseline and progressive JPEG, grayscale or YCbCr, at 4:4:4, 4:4:0, 4:2:2 or
+4:2:0. Files are within 0.2% of the standard library at the same quality and subsampling, and
+identical to libjpeg-turbo at quality 50. Optimized Huffman tables save ~4% at quality 50,
+rising to ~20% at quality 95; progressive mode ~9% more on flat color and hard edges, and little
+or nothing on detailed photographic content; jpegli's adaptive dead zone ~10% again. All three
+together are ~17% below plain baseline at ~2.1x the encode time.
 
 Against the standard library, ~1.9x on progressive and ~3.1x on baseline decode, ~2.9x decoding
 straight to RGBA, and ~4.5x to ~6.3x on encode, in two allocations rather than twelve. SIMD is
