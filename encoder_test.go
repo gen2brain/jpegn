@@ -814,3 +814,96 @@ func TestEncodeScanIsStuffed(t *testing.T) {
 		}
 	}
 }
+
+// TestDownsampleRow2x2MatchesScalar checks the box filter against the reference.
+func TestDownsampleRow2x2MatchesScalar(t *testing.T) {
+	rng := rand.New(rand.NewSource(11))
+
+	for _, n := range []int{0, 1, 2, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 255, 256} {
+		src0 := make([]byte, n*2+2)
+		src1 := make([]byte, n*2+2)
+
+		for i := range src0 {
+			src0[i] = byte(rng.Intn(256))
+			src1[i] = byte(rng.Intn(256))
+		}
+
+		want := make([]byte, n+8)
+		downsampleRow2x2Scalar(want, src0, src1, n)
+
+		got := make([]byte, n+8)
+		downsampleRow2x2(got, src0, src1, n)
+
+		for i := 0; i < n; i++ {
+			if got[i] != want[i] {
+				t.Fatalf("n=%d sample %d: got %d, want %d (src %d,%d,%d,%d)",
+					n, i, got[i], want[i], src0[i*2], src0[i*2+1], src1[i*2], src1[i*2+1])
+			}
+		}
+
+		for i := n; i < n+8; i++ {
+			if got[i] != 0 {
+				t.Fatalf("n=%d: wrote past end at %d", n, i)
+			}
+		}
+	}
+}
+
+// TestDownsampleRow2x2Exhaustive checks every sample pair in both source rows.
+func TestDownsampleRow2x2Exhaustive(t *testing.T) {
+	const n = 256
+
+	src0 := make([]byte, n*2)
+	src1 := make([]byte, n*2)
+	got := make([]byte, n)
+	want := make([]byte, n)
+
+	others := []byte{0, 1, 2, 3, 127, 128, 254, 255}
+
+	for _, swap := range []bool{false, true} {
+		for a := 0; a < 256; a++ {
+			for _, o := range others {
+				for i := 0; i < n; i++ {
+					lo, hi := &src0, &src1
+					if swap {
+						lo, hi = &src1, &src0
+					}
+
+					(*lo)[i*2] = byte(a)
+					(*lo)[i*2+1] = byte(i)
+					(*hi)[i*2] = o
+					(*hi)[i*2+1] = byte(255 - i)
+				}
+
+				downsampleRow2x2Scalar(want, src0, src1, n)
+				downsampleRow2x2(got, src0, src1, n)
+
+				for i := 0; i < n; i++ {
+					if got[i] != want[i] {
+						t.Fatalf("swap=%v a=%d o=%d sample %d: got %d, want %d",
+							swap, a, o, i, got[i], want[i])
+					}
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkDownsampleRow2x2(b *testing.B) {
+	const n = 512
+
+	src0 := make([]byte, n*2)
+	src1 := make([]byte, n*2)
+	dst := make([]byte, n)
+
+	for i := range src0 {
+		src0[i] = byte(i * 7 % 256)
+		src1[i] = byte(i * 13 % 256)
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		downsampleRow2x2(dst, src0, src1, n)
+	}
+}

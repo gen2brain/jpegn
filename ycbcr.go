@@ -267,15 +267,8 @@ func downsampleChroma(dstCb, dstCr, buf []byte, w, cw, sx, rows int) {
 
 	switch {
 	case sx == 2 && rows == 2:
-		n := full * 2
-		sCb0, sCb1 := cb0[:n], cb1[:n]
-		sCr0, sCr1 := cr0[:n], cr1[:n]
-
-		for cx := range outCb {
-			x := cx * 2
-			outCb[cx] = byte((int32(sCb0[x]) + int32(sCb0[x+1]) + int32(sCb1[x]) + int32(sCb1[x+1]) + 2) >> 2)
-			outCr[cx] = byte((int32(sCr0[x]) + int32(sCr0[x+1]) + int32(sCr1[x]) + int32(sCr1[x+1]) + 2) >> 2)
-		}
+		downsampleRow2x2(outCb, cb0, cb1, full)
+		downsampleRow2x2(outCr, cr0, cr1, full)
 	case sx == 2:
 		n := full * 2
 		sCb0, sCr0 := cb0[:n], cr0[:n]
