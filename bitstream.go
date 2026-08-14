@@ -1,5 +1,7 @@
 package jpegn
 
+import "encoding/binary"
+
 // Bitstream handling
 
 // showBits peeks the next bits without consuming them, handling byte stuffing.
@@ -15,6 +17,20 @@ func (d *decoder) showBits(bits int) int {
 	}
 
 	if !d.markerHit {
+		// Take four bytes at a time while none of them is 0xFF, so the common
+		// stuffing-free run costs one load instead of four branches.
+		for d.bufBits <= 32 && d.bufBits < bits && d.size >= 4 {
+			v := binary.BigEndian.Uint32(d.jpegData[d.pos:])
+			if (^v-0x01010101)&v&0x80808080 != 0 {
+				break
+			}
+
+			d.buf = d.buf<<32 | uint64(v)
+			d.bufBits += 32
+			d.pos += 4
+			d.size -= 4
+		}
+
 	fillLoop:
 		// Ensure we don't overflow the 64-bit buffer. Stop filling if d.bufBits > 56 (64-8),
 		// as we cannot safely shift left by 8 without losing bits.
