@@ -6,7 +6,8 @@
 
 No CGo, no dependencies.
 
-SIMD support for amd64 (AVX2) and arm64 (NEON). Build with `-tags noasm` for pure Go everywhere.
+SIMD support for amd64 (AVX2), arm64 (NEON) and riscv64 (RVV, with `GORISCV64=rva23u64`).
+Build with `-tags noasm` for pure Go everywhere.
 
 ### Decoding
 
