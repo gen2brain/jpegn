@@ -765,6 +765,99 @@ func testDecodeCMYK(t *testing.T) {
 	}
 }
 
+// TestDecodeAdobeTransformZero checks that a color transform of zero does not
+// turn a grayscale or a CMYK image into RGBA.
+func TestDecodeAdobeTransformZero(t *testing.T) {
+	eachTier(t, testDecodeAdobeTransformZero)
+}
+
+func testDecodeAdobeTransformZero(t *testing.T) {
+	app14 := []byte{0xff, 0xee, 0x00, 0x0e, 'A', 'd', 'o', 'b', 'e', 0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00}
+	gray := append(append(append([]byte(nil), testGRAY[:2]...), app14...), testGRAY[2:]...)
+
+	cmyk := append([]byte(nil), testCMYK...)
+	at := adobeTransform(cmyk)
+	if at < 0 {
+		t.Fatal("no Adobe marker in the CMYK fixture")
+	}
+	cmyk[at] = 0
+
+	for _, c := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"gray", gray, "*image.Gray"},
+		{"cmyk", cmyk, "*image.CMYK"},
+	} {
+		img, err := Decode(bytes.NewReader(c.data))
+		if err != nil {
+			t.Errorf("%s: Decode: %v", c.name, err)
+			continue
+		}
+		if got := fmt.Sprintf("%T", img); got != c.want {
+			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
+			continue
+		}
+
+		cfg, err := DecodeConfig(bytes.NewReader(c.data))
+		if err != nil {
+			t.Errorf("%s: DecodeConfig: %v", c.name, err)
+		} else if cfg.ColorModel != img.ColorModel() {
+			t.Errorf("%s: DecodeConfig says %T, Decode says %T", c.name, cfg.ColorModel, img.ColorModel())
+		}
+
+		ref, err := jpeg.Decode(bytes.NewReader(c.data))
+		if err != nil {
+			t.Errorf("%s: std jpeg.Decode: %v", c.name, err)
+			continue
+		}
+		if img.Bounds() != ref.Bounds() {
+			t.Errorf("%s: bounds %v, want %v", c.name, img.Bounds(), ref.Bounds())
+			continue
+		}
+		b := ref.Bounds()
+		for _, pt := range []image.Point{
+			{X: b.Min.X, Y: b.Min.Y},
+			{X: b.Max.X - 1, Y: b.Max.Y - 1},
+			{X: b.Dx() / 2, Y: b.Dy() / 2},
+		} {
+			gr, gg, gb, _ := img.At(pt.X, pt.Y).RGBA()
+			wr, wg, wb, _ := ref.At(pt.X, pt.Y).RGBA()
+			if !isClose(uint8(gr>>8), uint8(wr>>8), defaultTolerance) ||
+				!isClose(uint8(gg>>8), uint8(wg>>8), defaultTolerance) ||
+				!isClose(uint8(gb>>8), uint8(wb>>8), defaultTolerance) {
+				t.Errorf("%s: pixel at %v is %v, want close to %v", c.name, pt, img.At(pt.X, pt.Y), ref.At(pt.X, pt.Y))
+			}
+		}
+	}
+}
+
+// adobeTransform is the offset of the color transform byte of the APP14
+// marker, or -1 when there is none.
+func adobeTransform(d []byte) int {
+	for i := 2; i+4 < len(d); {
+		if d[i] != 0xff {
+			i++
+			continue
+		}
+		m := d[i+1]
+		if m == 0xd8 || m == 0x01 || (m >= 0xd0 && m <= 0xd7) {
+			i += 2
+			continue
+		}
+		if m == 0xda {
+			return -1
+		}
+		n := int(d[i+2])<<8 | int(d[i+3])
+		if m == 0xee && n >= 12 && i+2+n <= len(d) && string(d[i+4:i+9]) == "Adobe" {
+			return i + 2 + n - 1
+		}
+		i += 2 + n
+	}
+	return -1
+}
+
 // TestDecodeYCCK verifies that the decoder correctly handles YCbCrK (YCCK) JPEG images
 // by natively decoding them to image.CMYK format.
 func TestDecodeYCCK(t *testing.T) {

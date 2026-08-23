@@ -939,7 +939,7 @@ func (d *decoder) decodeSOF(configOnly bool) error {
 	}
 
 	// Allocate the final RGBA buffer if we know we will need it
-	if !configOnly && (d.toRGBA || d.isRGB || d.autoRotate) {
+	if !configOnly && (d.toRGBA || d.rgbOutput() || d.autoRotate) {
 		rgbaSize := d.width * d.height * 4
 		if rgbaSize <= 0 && (d.width > 0 && d.height > 0) {
 			return ErrOutOfMemory
@@ -1152,6 +1152,12 @@ func (d *decoder) convert() error {
 	}
 
 	return nil
+}
+
+// rgbOutput reports samples that are already RGB, which only a three
+// component frame can carry.
+func (d *decoder) rgbOutput() bool {
+	return d.isRGB && d.ncomp == 3
 }
 
 // transform applies rotation and flipping to the decoded RGBA image based on the EXIF orientation tag.
@@ -1462,7 +1468,7 @@ markerLoop:
 	}
 
 	needsRotation := d.autoRotate && d.orientation > 1
-	needsRGBA := d.toRGBA || d.isRGB || needsRotation
+	needsRGBA := d.toRGBA || d.rgbOutput() || needsRotation
 
 	if needsRGBA {
 		if d.pixels == nil && (d.width > 0 && d.height > 0) {
