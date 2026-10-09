@@ -4,6 +4,7 @@ import (
 	"image"
 	"io"
 	"math/bits"
+	"slices"
 	"sync"
 )
 
@@ -132,6 +133,7 @@ type encComponent struct {
 	hf, vf             int
 	coeffs             []int32
 	masks              []uint64
+	qcoeffs            []int16 // Zigzag blocks shared by the optimize passes.
 	nBlocksX, nBlocksY int
 	blocksPerLine      int
 	blocksPerCol       int
@@ -166,6 +168,7 @@ type encoder struct {
 	exif          []byte
 	segments      []Segment
 	gather        bool
+	cached        bool
 	blk           [64]int32
 	zblk          [64]int32
 	rowBuf        []byte
@@ -297,7 +300,10 @@ func (e *encoder) encode(m image.Image, quality int, sub Subsampling, optimize, 
 		return nil
 	}
 
+	e.cached = optimize
+
 	if optimize {
+		e.storeBlocks()
 		e.gather = true
 		e.dcFreq = [2][257]int32{}
 		e.acFreq = [2][257]int32{}
@@ -725,6 +731,12 @@ func (e *encoder) scan() {
 // encodeBlock transforms, quantizes and codes the block at (bx, by).
 func (e *encoder) encodeBlock(ci, bx, by int) {
 	c := &e.comp[ci]
+
+	if e.cached {
+		e.encodeStored(c, by*c.nBlocksX+bx)
+
+		return
+	}
 	blk := &e.blk
 	zb := &e.zblk
 
@@ -780,6 +792,110 @@ func (e *encoder) encodeCoeffs(zb *[64]int32, c *encComponent, nz uint64) {
 		}
 
 		s, b := magnitude(zb[zz[k]])
+		sym := run<<4 | int(s)
+
+		if e.gather {
+			af[sym]++
+		} else {
+			e.emitPair(t.code[sym], t.size[sym], b, s)
+		}
+
+		prev = k
+	}
+
+	if prev < 63 {
+		if e.gather {
+			af[0]++
+		} else {
+			e.emitBits(t.code[0], t.size[0])
+		}
+	}
+}
+
+// storeBlocks quantizes every block into c.qcoeffs, which int16 holds as values
+// clamp to 1023, with its zigzag non-zero mask in c.masks. Only the DC and the
+// masked positions are written, as encodeStored reads nothing else.
+func (e *encoder) storeBlocks() {
+	for ci := 0; ci < e.ncomp; ci++ {
+		c := &e.comp[ci]
+
+		c.nBlocksX = e.mcusX * c.ssX
+		c.nBlocksY = e.mcusY * c.ssY
+
+		blocks := c.nBlocksX * c.nBlocksY
+
+		c.qcoeffs = slices.Grow(c.qcoeffs[:0], blocks*64)[:blocks*64]
+		c.masks = slices.Grow(c.masks[:0], blocks)[:blocks]
+
+		recip := &e.qrecip[c.qtSel]
+		half := &e.qhalf[c.qtSel]
+
+		for by := 0; by < c.nBlocksY; by++ {
+			for bx := 0; bx < c.nBlocksX; bx++ {
+				blk := by*c.nBlocksX + bx
+
+				fdct(&e.blk, c.plane[by*8*c.stride+bx*8:], c.stride)
+
+				nz := quantizeBlock(&e.zblk, &e.blk, recip, half)
+				if e.adaptive {
+					nz = e.applyDeadZone(&e.zblk, &e.blk, nz, ci, e.aqStrength(ci, bx, by))
+				}
+
+				dst := c.qcoeffs[blk*64 : blk*64+64 : blk*64+64]
+				dst[0] = int16(e.zblk[0])
+
+				zm := uint64(0)
+
+				for t := nz; t != 0; t &= t - 1 {
+					n := bits.TrailingZeros64(t)
+					k := invZz[n]
+					dst[k] = int16(e.zblk[n])
+					zm |= 1 << k
+				}
+
+				c.masks[blk] = zm
+			}
+		}
+	}
+}
+
+// encodeStored codes block blk from the coefficients kept by storeBlocks.
+func (e *encoder) encodeStored(c *encComponent, blk int) {
+	coefs := c.qcoeffs[blk*64 : blk*64+64 : blk*64+64]
+
+	dc := int32(coefs[0])
+	diff := dc - c.pred
+	c.pred = dc
+
+	s, b := magnitude(diff)
+
+	if e.gather {
+		e.dcFreq[c.dcSel][s]++
+	} else {
+		t := &e.dcTab[c.dcSel]
+		e.emitPair(t.code[s], t.size[s], b, s)
+	}
+
+	af := &e.acFreq[c.acSel]
+	t := &e.acTab[c.acSel]
+
+	prev := 0
+
+	for zm := c.masks[blk] &^ 1; zm != 0; zm &= zm - 1 {
+		k := bits.TrailingZeros64(zm)
+
+		run := k - prev - 1
+		for run > 15 {
+			if e.gather {
+				af[0xF0]++
+			} else {
+				e.emitBits(t.code[0xF0], t.size[0xF0])
+			}
+
+			run -= 16
+		}
+
+		s, b := magnitude(int32(coefs[k]))
 		sym := run<<4 | int(s)
 
 		if e.gather {
