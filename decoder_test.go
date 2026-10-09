@@ -1755,3 +1755,56 @@ func TestConformance(t *testing.T) {
 
 	t.Logf("%d files, %d entries, %d changed", len(files), len(got), changed)
 }
+
+// orientRGBARef maps each pixel independently, as a reference for orientRGBA.
+func orientRGBARef(src []byte, w, h, orientation int) ([]byte, int, int) {
+	dw, dh := w, h
+	if orientation >= 5 {
+		dw, dh = h, w
+	}
+	dst := make([]byte, dw*dh*4)
+	for sy := 0; sy < h; sy++ {
+		for sx := 0; sx < w; sx++ {
+			var dx, dy int
+			switch orientation {
+			case 1:
+				dx, dy = sx, sy
+			case 2:
+				dx, dy = w-1-sx, sy
+			case 3:
+				dx, dy = w-1-sx, h-1-sy
+			case 4:
+				dx, dy = sx, h-1-sy
+			case 5:
+				dx, dy = sy, sx
+			case 6:
+				dx, dy = h-1-sy, sx
+			case 7:
+				dx, dy = h-1-sy, w-1-sx
+			case 8:
+				dx, dy = sy, w-1-sx
+			}
+			copy(dst[(dy*dw+dx)*4:(dy*dw+dx)*4+4], src[(sy*w+sx)*4:(sy*w+sx)*4+4])
+		}
+	}
+	return dst, dw, dh
+}
+
+func TestOrientRGBA(t *testing.T) {
+	sizes := [][2]int{{1, 1}, {2, 1}, {1, 2}, {7, 13}, {13, 7}, {32, 32}, {31, 64}, {65, 33}, {33, 65}}
+	for _, sz := range sizes {
+		w, h := sz[0], sz[1]
+		src := make([]byte, w*h*4)
+		for i := range src {
+			src[i] = byte(i*7 + i>>8)
+		}
+		for o := 1; o <= 8; o++ {
+			want, ww, wh := orientRGBARef(src, w, h, o)
+			got, gw, gh := orientRGBA(bytes.Clone(src), w, h, o)
+			if gw != ww || gh != wh || !bytes.Equal(got, want) {
+				t.Errorf("%dx%d orientation %d: got %dx%d, want %dx%d, pixels equal=%v",
+					w, h, o, gw, gh, ww, wh, bytes.Equal(got, want))
+			}
+		}
+	}
+}
