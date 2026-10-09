@@ -85,22 +85,40 @@ func (d *decoder) decodeBlock(c *component, outOffset int) {
 	// Decode AC coefficients.
 	coef := 1 // coef is the zigzag index.
 	for coef <= 63 {
-		value = d.getVLC(acHuff, &code)
-
-		if code == 0 { // EOB (also handles graceful termination at EOF)
-			break
+		// Refill as getVLC does, so both paths see the same bits.
+		if d.bufBits < 16 && !d.markerHit {
+			d.showBits(16)
 		}
 
-		if (code & 0x0F) == 0 {
-			if code != 0xF0 { // ZRL
-				d.panic(ErrSyntax)
+		// The fused entry is used only when all its bits are buffered data.
+		var e int16
+		if d.bufBits >= fastACBits {
+			e = acHuff.fastAC[(d.buf>>uint(d.bufBits-fastACBits))&(1<<fastACBits-1)]
+		}
+
+		if e != 0 {
+			d.bufBits -= int(e & 15)
+			coef += int(e>>4) & 15
+			value = int(e >> 8)
+		} else {
+			value = d.getVLC(acHuff, &code)
+
+			if code == 0 { // EOB (also handles graceful termination at EOF)
+				break
 			}
-			coef += 16
 
-			continue
+			if (code & 0x0F) == 0 {
+				if code != 0xF0 { // ZRL
+					d.panic(ErrSyntax)
+				}
+				coef += 16
+
+				continue
+			}
+
+			coef += int(code >> 4) // Skip run of zeros.
 		}
 
-		coef += int(code >> 4) // Skip run of zeros.
 		if coef > 63 {
 			d.panic(ErrSyntax)
 		}
