@@ -441,10 +441,17 @@ func testScaledIdctAgainstReference(t *testing.T) {
 			for iter := 0; iter < 2000; iter++ {
 				var blk [64]int32
 
+				// Odd iterations span the whole dequantized range, beyond valid 8-bit data.
 				blk[0] = int32(rng.Intn(2048)) - 1024
 				for i := 1; i < 64; i++ {
 					if rng.Intn(3) == 0 {
 						blk[i] = int32(rng.Intn(256)) - 128
+					}
+				}
+
+				if iter%2 == 1 {
+					for i := range blk {
+						blk[i] = int32(rng.Intn(2*dequantLimit+1)) - dequantLimit
 					}
 				}
 
@@ -476,7 +483,7 @@ func testScaledIdctAgainstReference(t *testing.T) {
 }
 
 // TestScaledIdctMatchesScalar checks the assembly 4x4 transform against the
-// pure Go one over the coefficient range the decoder clamps to.
+// pure Go one, including blocks at idct4x4MaxL1 where the kernels stop accepting.
 func TestScaledIdctMatchesScalar(t *testing.T) {
 	eachTier(t, testScaledIdctMatchesScalar)
 }
@@ -489,7 +496,7 @@ func testScaledIdctMatchesScalar(t *testing.T) {
 	for iter := 0; iter < 200000; iter++ {
 		var blk [64]int32
 
-		switch iter % 4 {
+		switch iter % 5 {
 		case 0:
 			blk[0] = dequantLimit
 		case 1:
@@ -499,6 +506,17 @@ func testScaledIdctMatchesScalar(t *testing.T) {
 		case 2:
 			for i := range blk {
 				blk[i] = int32(rng.Intn(2*dequantLimit+1)) - dequantLimit
+			}
+		case 3:
+			for left, k := idct4x4MaxL1-64+rng.Intn(129), 0; k < 16 && left > 0; k++ {
+				v := rng.Intn(left + 1)
+				left -= v
+
+				if rng.Intn(2) == 0 {
+					v = -v
+				}
+
+				blk[(k/4)*8+k%4] = int32(v)
 			}
 		default:
 			blk[0] = int32(rng.Intn(2048)) - 1024
@@ -520,5 +538,82 @@ func testScaledIdctMatchesScalar(t *testing.T) {
 				t.Fatalf("iter %d byte %d: got %d, want %d", iter, i, got[i], want[i])
 			}
 		}
+	}
+}
+
+// TestScaledIdct4x4DCOnly checks that a DC-only block decodes flat across the
+// whole dequantized range.
+func TestScaledIdct4x4DCOnly(t *testing.T) {
+	eachTier(t, testScaledIdct4x4DCOnly)
+}
+
+func testScaledIdct4x4DCOnly(t *testing.T) {
+	const stride = 4
+
+	out := make([]byte, 4*stride)
+
+	for dc := int32(-dequantLimit); dc <= dequantLimit; dc++ {
+		var blk [64]int32
+
+		blk[0] = dc
+
+		idctScaled(&blk, out, 0, stride, 2)
+
+		want := clamp(((dc + 4) >> 3) + 128)
+		for i, v := range out {
+			if v != want {
+				t.Fatalf("dc %d byte %d: got %d, want %d", dc, i, v, want)
+			}
+		}
+	}
+}
+
+// TestDecodeHalfScaleOverflow decodes files with out-of-range coefficients;
+// wherever the full-scale output is flat, the half-scale pixel must match it.
+func TestDecodeHalfScaleOverflow(t *testing.T) {
+	eachTier(t, testDecodeHalfScaleOverflow)
+}
+
+func testDecodeHalfScaleOverflow(t *testing.T) {
+	for _, name := range []string{"test.overflow.dc.jpg", "test.overflow.ac.jpg"} {
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile("testdata/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			full, err := Decode(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			half, err := Decode(bytes.NewReader(data), &Options{ScaleDenom: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			f, h := full.(*image.Gray), half.(*image.Gray)
+
+			var flat int
+
+			for y := 0; y < h.Rect.Dy(); y++ {
+				for x := 0; x < h.Rect.Dx(); x++ {
+					v := f.GrayAt(2*x, 2*y).Y
+					if f.GrayAt(2*x+1, 2*y).Y != v || f.GrayAt(2*x, 2*y+1).Y != v || f.GrayAt(2*x+1, 2*y+1).Y != v {
+						continue
+					}
+
+					flat++
+
+					if d := int(h.GrayAt(x, y).Y) - int(v); d > 32 || d < -32 {
+						t.Fatalf("(%d,%d): half %d, flat full %d", x, y, h.GrayAt(x, y).Y, v)
+					}
+				}
+			}
+
+			if flat == 0 {
+				t.Fatal("no flat full-scale area to compare")
+			}
+		})
 	}
 }

@@ -9,6 +9,12 @@ func idct4x4NEON(blk *[64]int32, out *byte, stride int)
 func idctScaled(blk *[64]int32, out []byte, outOffset int, stride int, scaleDenom int) {
 	switch scaleDenom {
 	case 2:
+		if !idct4x4Fits(blk) {
+			idct8x8To4x4(blk, out, outOffset, stride)
+
+			return
+		}
+
 		idct4x4NEON(blk, &out[outOffset], stride)
 	case 4:
 		idct8x8To2x2(blk, out, outOffset, stride)

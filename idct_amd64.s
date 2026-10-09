@@ -2,6 +2,11 @@
 
 #include "textflag.h"
 
+// The int32 lanes can wrap once the coefficient magnitudes sum past 2129, so
+// both kernels check them against MAXL1 (idct8x8MaxL1) after the DC-only test
+// and return false without writing, leaving such blocks to the int64 transform.
+#define MAXL1 2047
+
 // This file provides an optimized AVX2 implementation of the 8x8 Inverse Discrete Cosine Transform (IDCT).
 // The implementation uses the transposition method, applying the AAN fast IDCT algorithm.
 //
@@ -68,8 +73,8 @@ GLOBL mask_ac_coeffs<>(SB), RODATA|NOPTR, $32
 	VPUNPCKHDQ Y1, Y0, Y9; VPUNPCKHDQ Y3, Y2, Y11;  \
 	VPUNPCKHDQ Y5, Y4, Y13; VPUNPCKHDQ Y7, Y6, Y15
 
-// func idctAVX2(in *[64]int32, out []byte, offset int, stride int)
-TEXT ·idctAVX2(SB), NOSPLIT, $16-48
+// func idctAVX2(in *[64]int32, out []byte, offset int, stride int) bool
+TEXT ·idctAVX2(SB), NOSPLIT, $16-49
 	MOVQ in+0(FP), SI       // SI = input block pointer
 	MOVQ out_base+8(FP), DI // DI = output slice data pointer
 	MOVQ offset+32(FP), R8  // R8 = output offset
@@ -93,6 +98,17 @@ TEXT ·idctAVX2(SB), NOSPLIT, $16-48
 	// VPTEST checks if the result is zero (ZF=1 if Y15 is all zeros).
 	VPTEST Y15, Y15
 	JZ     dc_only_path
+
+	VPABSD Y0, Y8; VPABSD Y1, Y9; VPABSD Y2, Y10; VPABSD Y3, Y11
+	VPABSD Y4, Y12; VPABSD Y5, Y13; VPABSD Y6, Y14; VPABSD Y7, Y15
+	VPADDD Y9, Y8, Y8; VPADDD Y11, Y10, Y10; VPADDD Y13, Y12, Y12; VPADDD Y15, Y14, Y14
+	VPADDD Y10, Y8, Y8; VPADDD Y14, Y12, Y12; VPADDD Y12, Y8, Y8
+	VEXTRACTI128 $1, Y8, X9; VPADDD X9, X8, X8
+	VPSHUFD $0x4E, X8, X9; VPADDD X9, X8, X8
+	VPSHUFD $0xB1, X8, X9; VPADDD X9, X8, X8
+	VMOVD X8, AX
+	CMPL  AX, $MAXL1
+	JGT   avx2_over
 
 	// Transpose 1 (T1: Rows -> Columns/SoA Frequencies)
 	// Stage 1: 32-bit interleave.
@@ -412,7 +428,14 @@ dc_store_strided:
 	MOVQ R9, 0(DI); ADDQ CX, DI; MOVQ R9, 0(DI)
 
 done:
+	MOVB $1, ret+48(FP)
+
 	// Clear the upper 128 bits of all YMM registers before returning (AVX/SSE transition penalty avoidance).
+	VZEROUPPER
+	RET
+
+avx2_over:
+	MOVB $0, ret+48(FP)
 	VZEROUPPER
 	RET
 
@@ -619,8 +642,14 @@ done:
 	MOVQ     X8, (DI);      \
 	ADDQ     CX, DI
 
-// func idctSSE(in *[64]int32, out []byte, offset int, stride int)
-TEXT ·idctSSE(SB), NOSPLIT, $256-48
+// ABSSUM adds the magnitudes of the four coefficients at OFF(SI) into X2.
+#define ABSSUM(off) \
+	MOVOU off(SI), X1; \
+	PABSD X1, X1;      \
+	PADDL X1, X2
+
+// func idctSSE(in *[64]int32, out []byte, offset int, stride int) bool
+TEXT ·idctSSE(SB), NOSPLIT, $256-49
 	MOVQ in+0(FP), SI
 	MOVQ out_base+8(FP), DI
 	MOVQ offset+32(FP), R8
@@ -663,6 +692,15 @@ TEXT ·idctSSE(SB), NOSPLIT, $256-48
 	PTEST X0, X0
 	JZ    sse_dc_only
 
+	PXOR X2, X2
+	ABSSUM(0); ABSSUM(16); ABSSUM(32); ABSSUM(48); ABSSUM(64); ABSSUM(80); ABSSUM(96); ABSSUM(112)
+	ABSSUM(128); ABSSUM(144); ABSSUM(160); ABSSUM(176); ABSSUM(192); ABSSUM(208); ABSSUM(224); ABSSUM(240)
+	PSHUFD $0x4E, X2, X1; PADDL X1, X2
+	PSHUFD $0xB1, X2, X1; PADDL X1, X2
+	MOVL   X2, AX
+	CMPL   AX, $MAXL1
+	JGT    sse_over
+
 	IDCT_ROWS(0, 0)
 	IDCT_ROWS(128, 128)
 
@@ -689,6 +727,11 @@ TEXT ·idctSSE(SB), NOSPLIT, $256-48
 	IDCT_STORE(192, X6)
 	IDCT_STORE(224, X7)
 
+	MOVB $1, ret+48(FP)
+	RET
+
+sse_over:
+	MOVB $0, ret+48(FP)
 	RET
 
 sse_dc_only:
@@ -725,4 +768,5 @@ sse_dc_only:
 	ADDQ CX, DI
 	MOVQ X0, (DI)
 
+	MOVB $1, ret+48(FP)
 	RET

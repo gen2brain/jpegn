@@ -1,9 +1,13 @@
 //go:build amd64 && !noasm
 
+#include "go_asm.h"
 #include "textflag.h"
 
 // AVX2 4-point inverse DCT for 1/2 scaling, bit-identical to idct8x8To4x4.
 // Both passes run four lanes at a time, with a 4x4 transpose between them.
+// The lanes are 32 bits wide, so each kernel first sums the magnitudes of the
+// 16 coefficients and returns false without writing when they exceed
+// idct4x4MaxL1, leaving the block to the 64-bit scalar transform.
 
 #define CONST4(name, val) \
 DATA name<>+0(SB)/4, $val; \
@@ -59,19 +63,34 @@ CONST4(srnd2, 1048576)
 	VPACKUSWB r, r, r;        \
 	VMOVD r, off
 
-// func idct4x4AVX2(blk *[64]int32, out *byte, stride int)
-TEXT ·idct4x4AVX2(SB), NOSPLIT, $0-24
+// func idct4x4AVX2(blk *[64]int32, out *byte, stride int) bool
+TEXT ·idct4x4AVX2(SB), NOSPLIT, $0-25
 	MOVQ blk+0(FP), SI
 	MOVQ out+8(FP), DI
 	MOVQ stride+16(FP), CX
-
-	VMOVDQU sk1<>(SB), X14
-	VMOVDQU sk3<>(SB), X15
 
 	VMOVDQU 0(SI), X0
 	VMOVDQU 32(SI), X1
 	VMOVDQU 64(SI), X2
 	VMOVDQU 96(SI), X3
+
+	VPABSD  X0, X4
+	VPABSD  X1, X5
+	VPABSD  X2, X6
+	VPABSD  X3, X7
+	VPADDD  X5, X4, X4
+	VPADDD  X7, X6, X6
+	VPADDD  X6, X4, X4
+	VPSHUFD $0x4E, X4, X5
+	VPADDD  X5, X4, X4
+	VPSHUFD $0xB1, X4, X5
+	VPADDD  X5, X4, X4
+	VMOVD   X4, AX
+	CMPL    AX, $const_idct4x4MaxL1
+	JGT     avx2over
+
+	VMOVDQU sk1<>(SB), X14
+	VMOVDQU sk3<>(SB), X15
 
 	TRANSPOSE4(X0, X1, X2, X3, X8, X9, X4, X5, X6, X7)
 	PASS(X4, X5, X6, X7, srnd1<>(SB), $8, X0, X1, X2, X3)
@@ -86,6 +105,12 @@ TEXT ·idct4x4AVX2(SB), NOSPLIT, $0-24
 	ADDQ CX, DI
 	STOREROW(X3, (DI))
 
+	MOVB $1, ret+24(FP)
+	VZEROUPPER
+	RET
+
+avx2over:
+	MOVB $0, ret+24(FP)
 	VZEROUPPER
 	RET
 
@@ -148,19 +173,34 @@ TEXT ·idct4x4AVX2(SB), NOSPLIT, $0-24
 	PACKUSWB r, r;           \
 	MOVL     r, off
 
-// func idct4x4SSE(blk *[64]int32, out *byte, stride int)
-TEXT ·idct4x4SSE(SB), NOSPLIT, $0-24
+// func idct4x4SSE(blk *[64]int32, out *byte, stride int) bool
+TEXT ·idct4x4SSE(SB), NOSPLIT, $0-25
 	MOVQ blk+0(FP), SI
 	MOVQ out+8(FP), DI
 	MOVQ stride+16(FP), CX
-
-	MOVOU sk1<>(SB), X14
-	MOVOU sk3<>(SB), X15
 
 	MOVOU 0(SI), X0
 	MOVOU 32(SI), X1
 	MOVOU 64(SI), X2
 	MOVOU 96(SI), X3
+
+	PABSD  X0, X4
+	PABSD  X1, X5
+	PABSD  X2, X6
+	PABSD  X3, X7
+	PADDL  X5, X4
+	PADDL  X7, X6
+	PADDL  X6, X4
+	PSHUFD $0x4E, X4, X5
+	PADDL  X5, X4
+	PSHUFD $0xB1, X4, X5
+	PADDL  X5, X4
+	MOVL   X4, AX
+	CMPL   AX, $const_idct4x4MaxL1
+	JGT    sseover
+
+	MOVOU sk1<>(SB), X14
+	MOVOU sk3<>(SB), X15
 
 	TRANSPOSE4S(X0, X1, X2, X3, X8, X9, X10, X11)
 	PASSS(X0, X1, X2, X3, srnd1<>(SB), $8, X4, X5, X6, X7)
@@ -175,4 +215,9 @@ TEXT ·idct4x4SSE(SB), NOSPLIT, $0-24
 	ADDQ CX, DI
 	STOREROWS(X3, (DI))
 
+	MOVB $1, ret+24(FP)
+	RET
+
+sseover:
+	MOVB $0, ret+24(FP)
 	RET

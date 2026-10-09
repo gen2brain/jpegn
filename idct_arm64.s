@@ -8,6 +8,15 @@
 #define SSHR4S(k, n, d) WORD $(0x4F000400 | ((64 - (k)) << 16) | ((n) << 5) | (d))
 #define UQXTN2_8H(n, d) WORD $(0x6E614800 | ((n) << 5) | (d))
 #define UQXTN4H(n, d) WORD $(0x2E614800 | ((n) << 5) | (d))
+#define ABS4S(n, d) WORD $(0x4EA0B800 | ((n) << 5) | (d))
+
+// ADDABS adds the magnitudes of the four coefficients in Vn into V16.
+#define ADDABS(n) ABS4S(n, 17); VADD V17.S4, V16.S4, V16.S4
+
+// The int32 lanes can wrap once the coefficient magnitudes sum past 2129, so the
+// kernel checks them against MAXL1 (idct8x8MaxL1) after the DC-only test and
+// returns false without writing, leaving such blocks to the int64 transform.
+#define MAXL1 2047
 
 // Optimized ARM64 NEON 8x8 IDCT (AAN algorithm + transposition)
 // This implementation uses a two-pass approach with a matrix transpose in between.
@@ -53,7 +62,7 @@ CONST32(const_8192, 8192)
 	VDUP  R7, Vd.S4
 
 // func idctNEON(in *[64]int32, out []byte, offset int, stride int)
-TEXT ·idctNEON(SB), NOSPLIT, $0-48
+TEXT ·idctNEON(SB), NOSPLIT, $0-49
 	// Load function arguments from the stack into general-purpose registers.
 	MOVD in+0(FP), R0       // R0 = input block pointer (*[64]int32)
 	MOVD out_base+8(FP), R1 // R1 = output slice data pointer (&out[0])
@@ -88,6 +97,15 @@ TEXT ·idctNEON(SB), NOSPLIT, $0-48
 
 	// Restore the original DC coefficient if not taking the fast path.
 	VMOV R4, V0.S[0]
+
+	ABS4S(0, 16)
+	ADDABS(1); ADDABS(2); ADDABS(3); ADDABS(4); ADDABS(5); ADDABS(6); ADDABS(7)
+	ADDABS(8); ADDABS(9); ADDABS(10); ADDABS(11); ADDABS(12); ADDABS(13); ADDABS(14); ADDABS(15)
+	VADDV V16.S4, V16
+	VMOV  V16.S[0], R5
+	MOVD  $MAXL1, R6
+	CMPW  R6, R5
+	BGT   neon_over
 
 	// ===== Transpose 1 (Rows -> Columns) =====
 	VTRN1 V2.S4, V0.S4, V16.S4; VTRN2 V2.S4, V0.S4, V17.S4
@@ -392,4 +410,10 @@ dc_store_strided:
 	MOVD R5, (R1)
 
 done:
+	MOVD $1, R5
+	MOVB R5, ret+48(FP)
+	RET
+
+neon_over:
+	MOVB ZR, ret+48(FP)
 	RET

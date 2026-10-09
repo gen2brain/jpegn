@@ -13,14 +13,14 @@ const (
 )
 
 // rowIdct performs a 1D IDCT on a single 8-element row.
-func rowIdct(blk *[64]int32, offset int) {
+func rowIdct[T int32 | int64](blk *[64]T, offset int) {
 	// Operate on the specific row starting at offset
 	b := blk[offset : offset+8]
 
 	// Optimization: Explicitly assert the length of the slice to eliminate bounds checks (BCE).
 	_ = b[7]
 
-	var x0, x1, x2, x3, x4, x5, x6, x7, x8 int32
+	var x0, x1, x2, x3, x4, x5, x6, x7, x8 T
 
 	// Check if AC coefficients are zero (optimization)
 	x1 = b[4] << 11
@@ -92,7 +92,7 @@ func rowIdct(blk *[64]int32, offset int) {
 }
 
 // colIdct performs a 1D IDCT on a single 8-element column.
-func colIdct(blk *[64]int32, offset int, out []byte, outOffset int, stride int) {
+func colIdct[T int32 | int64](blk *[64]T, offset int, out []byte, outOffset int, stride int) {
 	// Optimization: Slice 'out' starting from outOffset to help BCE and simplify indexing.
 	// This assumes outOffset is valid (the slice operation will panic if not, which is acceptable).
 	if len(out) == 0 {
@@ -100,7 +100,7 @@ func colIdct(blk *[64]int32, offset int, out []byte, outOffset int, stride int) 
 	}
 	out = out[outOffset:]
 
-	var x0, x1, x2, x3, x4, x5, x6, x7, x8 int32
+	var x0, x1, x2, x3, x4, x5, x6, x7, x8 T
 
 	// Check for an optimization case
 	x1 = blk[offset+8*4] << 8
@@ -116,7 +116,7 @@ func colIdct(blk *[64]int32, offset int, out []byte, outOffset int, stride int) 
 		// Hint BCE. We access up to index 7*stride.
 		_ = out[7*stride]
 
-		x1 = int32(clamp(((blk[offset+8*0] + 32) >> 6) + 128))
+		x1 = T(clamp(int32((blk[offset+8*0]+32)>>6) + 128))
 		b := byte(x1)
 
 		// Unroll the loop for faster execution.
@@ -180,25 +180,53 @@ func colIdct(blk *[64]int32, offset int, out []byte, outOffset int, stride int) 
 
 	// Unroll the loop.
 	currentOutOffset := 0
-	out[currentOutOffset] = clamp(((x7 + x1) >> 14) + 128)
+	out[currentOutOffset] = clamp(int32((x7+x1)>>14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clamp(((x3 + x2) >> 14) + 128)
+	out[currentOutOffset] = clamp(int32((x3+x2)>>14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clamp(((x0 + x4) >> 14) + 128)
+	out[currentOutOffset] = clamp(int32((x0+x4)>>14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clamp(((x8 + x6) >> 14) + 128)
+	out[currentOutOffset] = clamp(int32((x8+x6)>>14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clamp(((x8 - x6) >> 14) + 128)
+	out[currentOutOffset] = clamp(int32((x8-x6)>>14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clamp(((x0 - x4) >> 14) + 128)
+	out[currentOutOffset] = clamp(int32((x0-x4)>>14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clamp(((x3 - x2) >> 14) + 128)
+	out[currentOutOffset] = clamp(int32((x3-x2)>>14) + 128)
 	currentOutOffset += stride
-	out[currentOutOffset] = clamp(((x7 - x1) >> 14) + 128)
+	out[currentOutOffset] = clamp(int32((x7-x1)>>14) + 128)
 }
 
-// idctIterative performs a full 8x8 2D IDCT (scalar), the shared assembly fallback.
+// idct8x8MaxL1 bounds the summed coefficient magnitude for which the 8x8
+// transform's int32 intermediates cannot wrap. The worst position grows an
+// intermediate by about 1008606 per unit, so 2129 is the limit; valid 8-bit
+// blocks rarely exceed 2047.
+const idct8x8MaxL1 = 2047
+
+// idctIterative performs a full 8x8 2D IDCT (scalar), the shared assembly
+// fallback, widening to int64 for blocks whose int32 arithmetic could wrap.
 func idctIterative(blk *[64]int32, out []byte, outOffset int, stride int) {
+	var s int32
+	for _, v := range blk {
+		s += abs32(v)
+	}
+
+	if s <= idct8x8MaxL1 {
+		idctPasses(blk, out, outOffset, stride)
+
+		return
+	}
+
+	var w [64]int64
+	for i, v := range blk {
+		w[i] = int64(v)
+	}
+
+	idctPasses(&w, out, outOffset, stride)
+}
+
+// idctPasses runs the row then column passes over blk.
+func idctPasses[T int32 | int64](blk *[64]T, out []byte, outOffset int, stride int) {
 	for i := 0; i < 64; i += 8 {
 		rowIdct(blk, i)
 	}
@@ -274,20 +302,47 @@ func idct8x8To4x4(blk *[64]int32, out []byte, outOffset int, stride int) {
 		tmp[i*4+3] = (t0 - p + (1 << 7)) >> 8
 	}
 
+	// The column pass runs in 64 bits: row outputs reach about 2^20 for
+	// coefficients at the dequantization limit, and shifting their sums by 13
+	// would wrap an int32.
 	for i := 0; i < 4; i++ {
-		f0 := tmp[0*4+i]
-		f1 := tmp[1*4+i]
-		f2 := tmp[2*4+i]
-		f3 := tmp[3*4+i]
+		f0 := int64(tmp[0*4+i])
+		f1 := int64(tmp[1*4+i])
+		f2 := int64(tmp[2*4+i])
+		f3 := int64(tmp[3*4+i])
 
 		t0 := (f0 + f2) << 13
 		t1 := (f0 - f2) << 13
 		p := f1*rk1 + f3*rk3
 		q := f1*rk3 - f3*rk1
 
-		out[outOffset+0*stride+i] = clamp(((t0 + p + (1 << 20)) >> 21) + 128)
-		out[outOffset+1*stride+i] = clamp(((t1 + q + (1 << 20)) >> 21) + 128)
-		out[outOffset+2*stride+i] = clamp(((t1 - q + (1 << 20)) >> 21) + 128)
-		out[outOffset+3*stride+i] = clamp(((t0 - p + (1 << 20)) >> 21) + 128)
+		out[outOffset+0*stride+i] = clamp(int32((t0+p+(1<<20))>>21) + 128)
+		out[outOffset+1*stride+i] = clamp(int32((t1+q+(1<<20))>>21) + 128)
+		out[outOffset+2*stride+i] = clamp(int32((t1-q+(1<<20))>>21) + 128)
+		out[outOffset+3*stride+i] = clamp(int32((t0-p+(1<<20))>>21) + 128)
 	}
+}
+
+// idct4x4MaxL1 bounds the summed magnitude of the 16 coefficients the 4x4
+// transform reads so that its int32 lane arithmetic cannot wrap. A row output
+// is at most 41.81 times its row's magnitude sum, so a column sum is at most
+// 10703*(41.81*L1+6) + 2^20, which stays below 2^31 for L1 up to 4796.
+const idct4x4MaxL1 = 4095
+
+// idct4x4Fits reports whether the vector 4x4 kernels, which keep every
+// intermediate in 32 bits, produce the same result as idct8x8To4x4 for blk.
+func idct4x4Fits(blk *[64]int32) bool {
+	s := abs32(blk[0]) + abs32(blk[1]) + abs32(blk[2]) + abs32(blk[3]) +
+		abs32(blk[8]) + abs32(blk[9]) + abs32(blk[10]) + abs32(blk[11]) +
+		abs32(blk[16]) + abs32(blk[17]) + abs32(blk[18]) + abs32(blk[19]) +
+		abs32(blk[24]) + abs32(blk[25]) + abs32(blk[26]) + abs32(blk[27])
+
+	return s <= idct4x4MaxL1
+}
+
+// abs32 returns |v|; dequant keeps v above math.MinInt32.
+func abs32(v int32) int32 {
+	m := v >> 31
+
+	return (v ^ m) - m
 }

@@ -2,9 +2,10 @@
 
 #include "textflag.h"
 
-// RVV 4-point inverse DCT for 1/2 scaling, bit-identical to idct8x8To4x4. The
-// coefficient columns are gathered with strided loads so both passes run
-// lane-wise; the transpose between them goes through the caller's scratch.
+// RVV 4-point inverse DCT for 1/2 scaling, bit-identical to idct8x8To4x4
+// within idct4x4MaxL1. The coefficient columns are gathered with strided loads
+// so both passes run lane-wise; the transpose between them goes through the
+// caller's scratch.
 
 #define PASS(a0, a1, a2, a3, rnd, sh, o0, o1, o2, o3) \
 	VADDVV a2, a0, V8;   \

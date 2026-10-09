@@ -9,6 +9,12 @@ func idct4x4RVV(blk *[64]int32, out *byte, stride int, scratch *[16]int32)
 func idctScaled(blk *[64]int32, out []byte, outOffset int, stride int, scaleDenom int) {
 	switch scaleDenom {
 	case 2:
+		if !idct4x4Fits(blk) {
+			idct8x8To4x4(blk, out, outOffset, stride)
+
+			return
+		}
+
 		var scratch [16]int32
 
 		idct4x4RVV(blk, &out[outOffset], stride, &scratch)

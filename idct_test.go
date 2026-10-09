@@ -3,6 +3,7 @@ package jpegn
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"math/rand"
 	"testing"
 )
@@ -283,7 +284,9 @@ func benchmarkIdct(b *testing.B) {
 }
 
 // TestIdctMatchesScalar checks the assembly IDCT against the pure Go one up to
-// dequantLimit, the magnitude the decoder clamps coefficients to.
+// dequantLimit, the magnitude the decoder clamps coefficients to, and both
+// against the reference; limit 0 splits idct8x8MaxL1 over the block, where the
+// kernels stop accepting.
 func TestIdctMatchesScalar(t *testing.T) {
 	eachTier(t, testIdctMatchesScalar)
 }
@@ -291,13 +294,26 @@ func TestIdctMatchesScalar(t *testing.T) {
 func testIdctMatchesScalar(t *testing.T) {
 	rng := rand.New(rand.NewSource(17))
 
-	limits := []int32{4, 255, 2047, 8192}
+	limits := []int32{0, 4, 255, 2047, 8192}
 
 	for _, lim := range limits {
 		for n := 0; n < 2000; n++ {
 			var blk [64]int32
 			for i := range blk {
-				blk[i] = rng.Int31n(lim)*2 - lim
+				if lim > 0 {
+					blk[i] = rng.Int31n(lim)*2 - lim
+				}
+			}
+
+			for left := idct8x8MaxL1 - 64 + rng.Intn(129); lim == 0 && left > 0; {
+				v := 1 + rng.Intn(left)
+				left -= v
+
+				if rng.Intn(2) == 0 {
+					v = -v
+				}
+
+				blk[rng.Intn(64)] += int32(v)
 			}
 
 			want := make([]byte, 64)
@@ -305,11 +321,17 @@ func testIdctMatchesScalar(t *testing.T) {
 
 			ref := blk
 			idctIterative(&ref, want, 0, 8)
+			exact := refReduced(&blk, 8)
 			idct(&blk, got, 0, 8)
 
 			for i := range want {
 				if got[i] != want[i] {
 					t.Fatalf("limit %d case %d: pixel %d got %d, want %d", lim, n, i, got[i], want[i])
+				}
+
+				// Fixed-point rounding grows with the coefficients; a wrap is far larger.
+				if d := math.Abs(float64(want[i]) - exact[i]); d > 8 {
+					t.Fatalf("limit %d case %d: pixel %d got %d, reference %.1f", lim, n, i, want[i], exact[i])
 				}
 			}
 		}

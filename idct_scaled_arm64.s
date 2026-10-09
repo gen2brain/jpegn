@@ -2,7 +2,8 @@
 
 #include "textflag.h"
 
-// NEON 4-point inverse DCT for 1/2 scaling, bit-identical to idct8x8To4x4.
+// NEON 4-point inverse DCT for 1/2 scaling, bit-identical to idct8x8To4x4
+// within idct4x4MaxL1.
 // Integer multiply, the rounding shift and the narrowing saturations are all
 // missing from the assembler, so the macros below encode them.
 
@@ -27,8 +28,8 @@ GLOBL sk<>(SB), RODATA|NOPTR, $8
 	VZIP2 V7.D2, V5.D2, V19.D2
 
 // One 4-point inverse DCT pass from V16-V19 into V0-V3. The rounding term is
-// added before the shift, not folded into a rounding shift, so the int32
-// wraparound at extreme coefficients matches the pure Go reference exactly.
+// added before the shift, not folded into a rounding shift, so each lane
+// matches the pure Go reference exactly for blocks within idct4x4MaxL1.
 #define PASS(rnd, sh) \
 	VADD V18.S4, V16.S4, V8.S4;   \
 	VSUB V18.S4, V16.S4, V9.S4;   \
