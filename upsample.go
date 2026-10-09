@@ -2,18 +2,14 @@
 
 package jpegn
 
-func upsampleNearestNeighbor(c *component, width, height int) {
-	upsampleNearestNeighborScalar(c, width, height)
+func upsampleHRows(dst, src []byte, w, h, dstStride, srcStride int) {
+	upsampleHRowsScalar(dst, src, w, h, dstStride, srcStride)
 }
 
-func upsampleCatmullRom(c *component, width, height int) {
-	upsampleCatmullRomScalar(c, width, height)
+func upsampleVRowPair(src, out1, out2 []byte, w, stride int) {
+	upsampleVMiddleRowPair(src, out1, out2, w, stride, 0)
 }
 
-func upsampleH(c *component) {
-	upsampleHScalar(c)
-}
-
-func upsampleV(c *component) {
-	upsampleVScalar(c)
+func upsampleNearestNeighborRows(dst, src []byte, w, h, dstStride, srcStride int) {
+	upsampleNearestNeighborRowsScalar(dst, src, w, h, dstStride, srcStride)
 }

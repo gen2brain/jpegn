@@ -420,3 +420,61 @@ func testYCbCrToRGBAExhaustive(t *testing.T) {
 		}
 	}
 }
+
+// TestYCbCrToRGBAUpsampled compares the strip-fused upsampling conversion against
+// whole-plane upsampling followed by conversion, across strip and edge boundaries.
+func TestYCbCrToRGBAUpsampled(t *testing.T) {
+	eachTier(t, testYCbCrToRGBAUpsampled)
+}
+
+func testYCbCrToRGBAUpsampled(t *testing.T) {
+	sizes := []struct{ w, h int }{
+		{5, 5}, {6, 6}, {7, 8}, {9, 3}, {16, 16}, {21, 9}, {22, 33}, {37, 34},
+		{38, 70}, {40, 71}, {64, 72}, {65, 73}, {97, 105}, {130, 140}, {975, 37},
+	}
+
+	for _, method := range []UpsampleMethod{NearestNeighbor, CatmullRom} {
+		for _, ratio := range []string{"420", "422"} {
+			for _, sz := range sizes {
+				cw, ch := (sz.w+1)/2, sz.h
+				if ratio == "420" {
+					ch = (sz.h + 1) / 2
+				}
+
+				name := ratio + "/" + tc2name(sz.w, sz.h, sz.w+3)
+				if method == CatmullRom {
+					name = "CatmullRom/" + name
+				} else {
+					name = "NearestNeighbor/" + name
+				}
+
+				t.Run(name, func(t *testing.T) {
+					y := makeRandComponentStride(sz.w, sz.h, sz.w+3)
+					cb := makeRandComponentStride(cw, ch, cw+5)
+					cr := makeRandComponentStride(cw, ch, cw+7)
+
+					got := make([]byte, sz.w*sz.h*4)
+					if !yCbCrToRGBAUpsampled(y, cb, cr, got, sz.w, sz.h, method) {
+						t.Fatal("layout not handled")
+					}
+
+					wantCb, wantCr := cloneComponent(cb), cloneComponent(cr)
+					for _, c := range []*component{wantCb, wantCr} {
+						if upsampleCubic(c, sz.w, sz.h, method) {
+							upsampleCatmullRom(c, sz.w, sz.h)
+						} else {
+							upsampleNearestNeighbor(c, sz.w, sz.h)
+						}
+					}
+
+					want := make([]byte, sz.w*sz.h*4)
+					yCbCrToRGBA(y, wantCb, wantCr, want, sz.w, sz.h)
+
+					if !bytes.Equal(got, want) {
+						t.Fatalf("mismatch: %s", findFirstDiff(got, want, sz.w))
+					}
+				})
+			}
+		}
+	}
+}

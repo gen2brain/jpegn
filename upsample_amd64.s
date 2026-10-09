@@ -343,270 +343,6 @@ clipF_h:
 	VZEROUPPER
 	RET
 
-// func upsampleVAVX2(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)
-// Performs 2x vertical Catmull-Rom upsampling using AVX2.
-TEXT ·upsampleVAVX2(SB), NOSPLIT, $0-48
-	MOVQ dst+0(FP), DI
-	MOVQ src+8(FP), SI
-	MOVQ w+16(FP), R8
-	MOVQ h+24(FP), R9
-	MOVQ dstStride+32(FP), R10
-	MOVQ srcStride+40(FP), R11
-
-	// Load constants into YMM registers.
-	VMOVDQU ·const_catmull_rom_AB(SB), Y13
-	VMOVDQU ·const_catmull_rom_CD(SB), Y12
-	VMOVDQU ·const_catmull_rom_DC(SB), Y11
-	VMOVDQU ·const_catmull_rom_BA(SB), Y10
-	VMOVDQU ·const_64(SB), Y14
-
-	// Initialize pointers for the top edge processing.
-	MOVQ SI, R12 // R12: Src column pointer
-	MOVQ DI, R13 // R13: Dst column pointer
-	MOVQ R8, CX  // Width counter
-
-	// Process the first three output rows (0, 1, 2) for each column.
-v_top_edge_loop:
-	TESTQ CX, CX
-	JZ    v_main_loop_start
-
-	// Load p0, p1, p2 vertically from three different source rows.
-	XORQ AX, AX; MOVB (R12), AL
-	XORQ BX, BX; MOVB (R12)(R11*1), BL
-	XORQ DX, DX; MOVB (R12)(R11*2), DL
-
-	// O0 = cf(139*p0 - 11*p1)
-	MOVQ AX, R14; IMULQ $139, R14
-	MOVQ BX, R15; IMULQ $-11, R15; ADDQ R15, R14
-	ADDQ $64, R14; SARQ $7, R14
-	CMPQ R14, $0; JGE v_clip0; XORQ R14, R14
-
-v_clip0:
-	CMPQ R14, $255; JLE v_clip1; MOVQ $255, R14
-
-v_clip1:
-	MOVB R14B, (R13)
-
-	// O1 = cf(104*p0 + 27*p1 - 3*p2)
-	MOVQ AX, R14; IMULQ $104, R14
-	MOVQ BX, R15; IMULQ $27, R15; ADDQ R15, R14
-	MOVQ DX, R15; IMULQ $-3, R15; ADDQ R15, R14
-	ADDQ $64, R14; SARQ $7, R14
-	CMPQ R14, $0; JGE v_clip2; XORQ R14, R14
-
-v_clip2:
-	CMPQ R14, $255; JLE v_clip3; MOVQ $255, R14
-
-v_clip3:
-	MOVB R14B, (R13)(R10*1)
-
-	// O2 = cf(28*p0 + 109*p1 - 9*p2)
-	MOVQ AX, R14; IMULQ $28, R14
-	MOVQ BX, R15; IMULQ $109, R15; ADDQ R15, R14
-	MOVQ DX, R15; IMULQ $-9, R15; ADDQ R15, R14
-	ADDQ $64, R14; SARQ $7, R14
-	CMPQ R14, $0; JGE v_clip4; XORQ R14, R14
-
-v_clip4:
-	CMPQ R14, $255; JLE v_clip5; MOVQ $255, R14
-
-v_clip5:
-	MOVB R14B, (R13)(R10*2)
-
-	INCQ R12; INCQ R13; DECQ CX
-	JMP  v_top_edge_loop
-
-v_main_loop_start:
-	MOVQ  R9, R15; SUBQ $3, R15
-	TESTQ R15, R15
-	JZ    v_bottom_edge_start
-
-	// Source pointer for the main loop starts at the beginning (row 0).
-	MOVQ SI, R12
-
-	// Destination pointer starts at output row 3.
-	MOVQ DI, R13
-	LEAQ (R13)(R10*2), R13
-	ADDQ R10, R13
-
-	VPXOR Y15, Y15, Y15 // Zero Y15 for use in packing.
-
-v_y_loop:
-	// Pointers to the start of the 16-pixel block in each of the 4 source rows.
-	MOVQ R12, AX
-	LEAQ (R12)(R11*1), BX
-	LEAQ (R12)(R11*2), CX
-	LEAQ (CX)(R11*1), DX  // p3_ptr = R12 + 3*srcStride
-
-	// Pointers to the 2 destination rows.
-	MOVQ R13, R14         // o1_ptr
-	LEAQ (R13)(R10*1), BP // o2_ptr
-
-	MOVQ R8, R9 // Use R9 as width counter for the x-loop.
-
-v_x_loop:
-	CMPQ R9, $16
-	JL   v_x_rem
-
-	// Load 16 pixels from each of the 4 consecutive source rows.
-	VMOVDQU (AX), X0; VMOVDQU (BX), X1; VMOVDQU (CX), X2; VMOVDQU (DX), X3
-
-	// Unpack, interleave, and apply filter (same logic as horizontal).
-	VPMOVZXBW  X0, Y0; VPMOVZXBW X1, Y1; VPMOVZXBW X2, Y2; VPMOVZXBW X3, Y3
-	VPUNPCKLWD Y1, Y0, Y4; VPUNPCKHWD Y1, Y0, Y5
-	VPUNPCKLWD Y3, Y2, Y6; VPUNPCKHWD Y3, Y2, Y7
-
-	// Calculate O1.
-	VPMADDWD Y13, Y4, Y8; VPMADDWD Y13, Y5, Y9
-	VPMADDWD Y12, Y6, Y2; VPMADDWD Y12, Y7, Y3
-	VPADDD   Y2, Y8, Y8; VPADDD Y3, Y9, Y9
-
-	// Calculate O2.
-	VPMADDWD Y11, Y4, Y4; VPMADDWD Y11, Y5, Y5
-	VPMADDWD Y10, Y6, Y6; VPMADDWD Y10, Y7, Y7
-	VPADDD   Y6, Y4, Y4; VPADDD Y7, Y5, Y5
-
-	// Round and Shift.
-	VPADDD Y14, Y8, Y8; VPADDD Y14, Y9, Y9; VPADDD Y14, Y4, Y4; VPADDD Y14, Y5, Y5
-	VPSRAD $7, Y8, Y8; VPSRAD $7, Y9, Y9; VPSRAD $7, Y4, Y4; VPSRAD $7, Y5, Y5
-
-	// Pack 32-bit dwords to 16-bit signed words.
-	VPACKSSDW Y9, Y8, Y8 // O1 words (Y8)
-	VPACKSSDW Y5, Y4, Y4 // O2 words (Y4)
-
-	// Pack 256-bit vector of 16-bit words into a 128-bit vector of 8-bit bytes
-	// This is a standard shuffle pattern to combine results from both lanes of a YMM register.
-
-	// Pack words to bytes in-lane.
-	VPACKUSWB Y15, Y8, Y8
-	VPACKUSWB Y15, Y4, Y4
-
-	// Extract the high 128-bit lane.
-	VEXTRACTF128 $1, Y8, X9
-	VEXTRACTF128 $1, Y4, X5
-
-	// Interleave the low and high parts to form a contiguous 16-byte result.
-	VPUNPCKLQDQ X9, X8, X8
-	VPUNPCKLQDQ X5, X4, X4
-
-	// Store the 16-byte results to the two destination rows.
-	VMOVDQU X8, (R14)
-	VMOVDQU X4, (BP)
-
-	// Advance pointers for the next block of 16 pixels.
-	ADDQ $16, AX; ADDQ $16, BX; ADDQ $16, CX; ADDQ $16, DX
-	ADDQ $16, R14; ADDQ $16, BP
-	SUBQ $16, R9
-	JMP  v_x_loop
-
-v_x_rem:
-	TESTQ R9, R9
-	JZ    v_y_loop_end
-	MOVQ  AX, SI
-
-v_x_rem_loop:
-	LEAQ (SI)(R11*2), CX
-	ADDQ R11, CX
-
-	// Calculate O1 = cf(A*p0 + B*p1 + C*p2 + D*p3)
-	XORQ BX, BX; MOVB (SI), BL; IMULQ $-9, BX; MOVQ BX, DX
-	XORQ BX, BX; MOVB (SI)(R11*1), BL; IMULQ $111, BX; ADDQ BX, DX
-	XORQ BX, BX; MOVB (SI)(R11*2), BL; IMULQ $29, BX; ADDQ BX, DX
-	XORQ BX, BX; MOVB (CX), BL; IMULQ $-3, BX; ADDQ BX, DX
-	ADDQ $64, DX; SARQ $7, DX
-	CMPQ DX, $0; JGE v_clip6; XORQ DX, DX
-
-v_clip6:
-	CMPQ DX, $255; JLE v_clip7; MOVQ $255, DX
-
-v_clip7:
-	MOVB DL, (R14)
-
-	// Calculate O2 = cf(D*p0 + C*p1 + B*p2 + A*p3)
-	XORQ BX, BX; MOVB (SI), BL; IMULQ $-3, BX; MOVQ BX, AX
-	XORQ BX, BX; MOVB (SI)(R11*1), BL; IMULQ $29, BX; ADDQ BX, AX
-	XORQ BX, BX; MOVB (SI)(R11*2), BL; IMULQ $111, BX; ADDQ BX, AX
-	XORQ BX, BX; MOVB (CX), BL; IMULQ $-9, BX; ADDQ BX, AX
-	ADDQ $64, AX; SARQ $7, AX
-	CMPQ AX, $0; JGE v_clip8; XORQ AX, AX
-
-v_clip8:
-	CMPQ AX, $255; JLE v_clip9; MOVQ $255, AX
-
-v_clip9:
-	MOVB AL, (BP)
-
-	INCQ SI; INCQ R14; INCQ BP
-	DECQ R9
-	JNZ  v_x_rem_loop
-
-v_y_loop_end:
-	// Advance the main loop pointers to the next set of rows.
-	ADDQ R11, R12 // src_row_ptr += srcStride
-	ADDQ R10, R13 // dst_row_ptr += 2 * dstStride
-	ADDQ R10, R13
-
-	DECQ R15
-	JNZ  v_y_loop
-
-v_bottom_edge_start:
-	// Pointers R12 and R13 are already positioned correctly by the main loop.
-	MOVQ R8, CX // Width counter
-
-v_bottom_edge_loop:
-	TESTQ CX, CX
-	JZ    v_done
-
-	// Load pixels in reverse order for the symmetric filter.
-	XORQ DX, DX; MOVB (R12)(R11*2), DL // p0B = p(H-1)
-	XORQ BX, BX; MOVB (R12)(R11*1), BL // p1B = p(H-2)
-	XORQ AX, AX; MOVB (R12), AL        // p2B = p(H-3)
-
-	// O(2H-3) (mirrors O2)
-	MOVQ DX, R14; IMULQ $28, R14
-	MOVQ BX, R15; IMULQ $109, R15; ADDQ R15, R14
-	MOVQ AX, R15; IMULQ $-9, R15; ADDQ R15, R14
-	ADDQ $64, R14; SARQ $7, R14
-	CMPQ R14, $0; JGE v_clipA; XORQ R14, R14
-
-v_clipA:
-	CMPQ R14, $255; JLE v_clipB; MOVQ $255, R14
-
-v_clipB:
-	MOVB R14B, (R13)
-
-	// O(2H-2) (mirrors O1)
-	MOVQ DX, R14; IMULQ $104, R14
-	MOVQ BX, R15; IMULQ $27, R15; ADDQ R15, R14
-	MOVQ AX, R15; IMULQ $-3, R15; ADDQ R15, R14
-	ADDQ $64, R14; SARQ $7, R14
-	CMPQ R14, $0; JGE v_clipC; XORQ R14, R14
-
-v_clipC:
-	CMPQ R14, $255; JLE v_clipD; MOVQ $255, R14
-
-v_clipD:
-	MOVB R14B, (R13)(R10*1)
-
-	// O(2H-1) (mirrors O0)
-	MOVQ DX, R14; IMULQ $139, R14
-	MOVQ BX, R15; IMULQ $-11, R15; ADDQ R15, R14
-	ADDQ $64, R14; SARQ $7, R14
-	CMPQ R14, $0; JGE v_clipE; XORQ R14, R14
-
-v_clipE:
-	CMPQ R14, $255; JLE v_clipF; MOVQ $255, R14
-
-v_clipF:
-	MOVB R14B, (R13)(R10*2)
-
-	INCQ R12; INCQ R13; DECQ CX
-	JMP  v_bottom_edge_loop
-
-v_done:
-	VZEROUPPER
-	RET
-
 // Clamp REG to [0,255] using TMP.
 #define CLAMP(reg, tmp) \
 	XORQ    tmp, tmp;   \
@@ -888,14 +624,77 @@ sse_done_row_h:
 
 	RET
 
-// func upsampleVSSE(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)
-TEXT ·upsampleVSSE(SB), NOSPLIT, $0-48
-	MOVQ dst+0(FP), DI
-	MOVQ src+8(FP), SI
-	MOVQ w+16(FP), R8
-	MOVQ h+24(FP), R9
-	MOVQ dstStride+32(FP), R10
-	MOVQ srcStride+40(FP), R11
+// func upsampleVMiddleAVX2(dst1, dst2, src unsafe.Pointer, stride, n int)
+// Writes n samples (a multiple of 16) to each output row; p0..p3 = rows src+k*stride.
+TEXT ·upsampleVMiddleAVX2(SB), NOSPLIT, $0-40
+	MOVQ dst1+0(FP), R8
+	MOVQ dst2+8(FP), R9
+	MOVQ src+16(FP), AX
+	MOVQ stride+24(FP), R11
+	MOVQ n+32(FP), R10
+
+	VMOVDQU ·const_catmull_rom_AB(SB), Y13
+	VMOVDQU ·const_catmull_rom_CD(SB), Y12
+	VMOVDQU ·const_catmull_rom_DC(SB), Y11
+	VMOVDQU ·const_catmull_rom_BA(SB), Y10
+	VMOVDQU ·const_64(SB), Y14
+	VPXOR   Y15, Y15, Y15
+
+	LEAQ (AX)(R11*1), BX
+	LEAQ (AX)(R11*2), CX
+	LEAQ (CX)(R11*1), DX
+
+vmid_avx2_loop:
+	CMPQ R10, $16
+	JL   vmid_avx2_done
+
+	VMOVDQU (AX), X0; VMOVDQU (BX), X1; VMOVDQU (CX), X2; VMOVDQU (DX), X3
+
+	VPMOVZXBW  X0, Y0; VPMOVZXBW X1, Y1; VPMOVZXBW X2, Y2; VPMOVZXBW X3, Y3
+	VPUNPCKLWD Y1, Y0, Y4; VPUNPCKHWD Y1, Y0, Y5
+	VPUNPCKLWD Y3, Y2, Y6; VPUNPCKHWD Y3, Y2, Y7
+
+	VPMADDWD Y13, Y4, Y8; VPMADDWD Y13, Y5, Y9
+	VPMADDWD Y12, Y6, Y2; VPMADDWD Y12, Y7, Y3
+	VPADDD   Y2, Y8, Y8; VPADDD Y3, Y9, Y9
+
+	VPMADDWD Y11, Y4, Y4; VPMADDWD Y11, Y5, Y5
+	VPMADDWD Y10, Y6, Y6; VPMADDWD Y10, Y7, Y7
+	VPADDD   Y6, Y4, Y4; VPADDD Y7, Y5, Y5
+
+	VPADDD Y14, Y8, Y8; VPADDD Y14, Y9, Y9; VPADDD Y14, Y4, Y4; VPADDD Y14, Y5, Y5
+	VPSRAD $7, Y8, Y8; VPSRAD $7, Y9, Y9; VPSRAD $7, Y4, Y4; VPSRAD $7, Y5, Y5
+
+	VPACKSSDW Y9, Y8, Y8
+	VPACKSSDW Y5, Y4, Y4
+
+	VPACKUSWB    Y15, Y8, Y8
+	VPACKUSWB    Y15, Y4, Y4
+	VEXTRACTF128 $1, Y8, X9
+	VEXTRACTF128 $1, Y4, X5
+	VPUNPCKLQDQ  X9, X8, X8
+	VPUNPCKLQDQ  X5, X4, X4
+
+	VMOVDQU X8, (R8)
+	VMOVDQU X4, (R9)
+
+	ADDQ $16, AX; ADDQ $16, BX; ADDQ $16, CX; ADDQ $16, DX
+	ADDQ $16, R8; ADDQ $16, R9
+	SUBQ $16, R10
+	JMP  vmid_avx2_loop
+
+vmid_avx2_done:
+	VZEROUPPER
+	RET
+
+// func upsampleVMiddleSSE(dst1, dst2, src unsafe.Pointer, stride, n int)
+// Writes n samples (a multiple of 8) to each output row; p0..p3 = rows src+k*stride.
+TEXT ·upsampleVMiddleSSE(SB), NOSPLIT, $0-40
+	MOVQ dst1+0(FP), R8
+	MOVQ dst2+8(FP), R9
+	MOVQ src+16(FP), AX
+	MOVQ stride+24(FP), R11
+	MOVQ n+32(FP), R10
 
 	MOVOU ·const_catmull_rom_AB(SB), X10
 	MOVOU ·const_catmull_rom_CD(SB), X11
@@ -903,59 +702,13 @@ TEXT ·upsampleVSSE(SB), NOSPLIT, $0-48
 	MOVOU ·const_catmull_rom_BA(SB), X13
 	MOVOU ·const_64(SB), X14
 
-	MOVQ SI, R12
-	MOVQ DI, R13
-	MOVQ R8, CX
-
-sse_v_top_edge_loop:
-	TESTQ CX, CX
-	JZ    sse_v_main_loop_start
-
-	XORQ AX, AX
-	MOVB (R12), AL
-	XORQ BX, BX
-	MOVB (R12)(R11*1), BL
-	XORQ DX, DX
-	MOVB (R12)(R11*2), DL
-
-	TAP2(AX, BX, $139, $-11, R14, R15)
-	MOVB R14B, (R13)
-	TAP3(AX, BX, DX, $104, $27, $-3, R14, R15)
-	MOVB R14B, (R13)(R10*1)
-	TAP3(AX, BX, DX, $28, $109, $-9, R14, R15)
-	MOVB R14B, (R13)(R10*2)
-
-	INCQ R12
-	INCQ R13
-	DECQ CX
-	JMP  sse_v_top_edge_loop
-
-sse_v_main_loop_start:
-	MOVQ  R9, R15
-	SUBQ  $3, R15
-	TESTQ R15, R15
-	JZ    sse_v_bottom_edge_start
-
-	MOVQ SI, R12
-
-	MOVQ DI, R13
-	LEAQ (R13)(R10*2), R13
-	ADDQ R10, R13
-
-sse_v_y_loop:
-	MOVQ R12, AX
-	LEAQ (R12)(R11*1), BX
-	LEAQ (R12)(R11*2), CX
+	LEAQ (AX)(R11*1), BX
+	LEAQ (AX)(R11*2), CX
 	LEAQ (CX)(R11*1), DX
 
-	MOVQ R13, R14
-	LEAQ (R13)(R10*1), BP
-
-	MOVQ R8, R9
-
-sse_v_x_loop:
-	CMPQ R9, $8
-	JL   sse_v_x_rem
+vmid_sse_loop:
+	CMPQ R10, $8
+	JL   vmid_sse_done
 
 	PMOVZXBW (AX), X0
 	PMOVZXBW (BX), X1
@@ -975,108 +728,17 @@ sse_v_x_loop:
 
 	PACKUSWB X8, X8
 	PACKUSWB X4, X4
-	MOVQ     X8, (R14)
-	MOVQ     X4, (BP)
+	MOVQ     X8, (R8)
+	MOVQ     X4, (R9)
 
 	ADDQ $8, AX
 	ADDQ $8, BX
 	ADDQ $8, CX
 	ADDQ $8, DX
-	ADDQ $8, R14
-	ADDQ $8, BP
-	SUBQ $8, R9
-	JMP  sse_v_x_loop
+	ADDQ $8, R8
+	ADDQ $8, R9
+	SUBQ $8, R10
+	JMP  vmid_sse_loop
 
-sse_v_x_rem:
-	TESTQ R9, R9
-	JZ    sse_v_y_loop_end
-	MOVQ  AX, SI
-
-sse_v_x_rem_loop:
-	LEAQ (SI)(R11*2), CX
-	ADDQ R11, CX
-
-	XORQ  BX, BX
-	MOVB  (SI), BL
-	IMULQ $-9, BX
-	MOVQ  BX, DX
-	XORQ  BX, BX
-	MOVB  (SI)(R11*1), BL
-	IMULQ $111, BX
-	ADDQ  BX, DX
-	XORQ  BX, BX
-	MOVB  (SI)(R11*2), BL
-	IMULQ $29, BX
-	ADDQ  BX, DX
-	XORQ  BX, BX
-	MOVB  (CX), BL
-	IMULQ $-3, BX
-	ADDQ  BX, DX
-	ADDQ  $64, DX
-	SARQ  $7, DX
-	CLAMP(DX, BX)
-	MOVB  DL, (R14)
-
-	XORQ  BX, BX
-	MOVB  (SI), BL
-	IMULQ $-3, BX
-	MOVQ  BX, AX
-	XORQ  BX, BX
-	MOVB  (SI)(R11*1), BL
-	IMULQ $29, BX
-	ADDQ  BX, AX
-	XORQ  BX, BX
-	MOVB  (SI)(R11*2), BL
-	IMULQ $111, BX
-	ADDQ  BX, AX
-	XORQ  BX, BX
-	MOVB  (CX), BL
-	IMULQ $-9, BX
-	ADDQ  BX, AX
-	ADDQ  $64, AX
-	SARQ  $7, AX
-	CLAMP(AX, BX)
-	MOVB  AL, (BP)
-
-	INCQ SI
-	INCQ R14
-	INCQ BP
-	DECQ R9
-	JNZ  sse_v_x_rem_loop
-
-sse_v_y_loop_end:
-	ADDQ R11, R12
-	ADDQ R10, R13
-	ADDQ R10, R13
-
-	DECQ R15
-	JNZ  sse_v_y_loop
-
-sse_v_bottom_edge_start:
-	MOVQ R8, CX
-
-sse_v_bottom_edge_loop:
-	TESTQ CX, CX
-	JZ    sse_v_done
-
-	XORQ DX, DX
-	MOVB (R12)(R11*2), DL
-	XORQ BX, BX
-	MOVB (R12)(R11*1), BL
-	XORQ AX, AX
-	MOVB (R12), AL
-
-	TAP3(DX, BX, AX, $28, $109, $-9, R14, R15)
-	MOVB R14B, (R13)
-	TAP3(DX, BX, AX, $104, $27, $-3, R14, R15)
-	MOVB R14B, (R13)(R10*1)
-	TAP2(DX, BX, $139, $-11, R14, R15)
-	MOVB R14B, (R13)(R10*2)
-
-	INCQ R12
-	INCQ R13
-	DECQ CX
-	JMP  sse_v_bottom_edge_loop
-
-sse_v_done:
+vmid_sse_done:
 	RET

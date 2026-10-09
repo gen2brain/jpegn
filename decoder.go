@@ -1116,17 +1116,18 @@ func (d *decoder) decodeDRI() error {
 
 // convert handles upsampling of chroma components (if needed) and converts the final YCbCr/RGB pixel data to RGBA format.
 func (d *decoder) convert() error {
+	// Upsampling chroma per strip during conversion keeps it cache-resident and
+	// avoids allocating full-resolution chroma planes.
+	if d.ncomp == 3 && !d.isRGB &&
+		yCbCrToRGBAUpsampled(&d.comp[0], &d.comp[1], &d.comp[2], d.pixels, d.width, d.height, d.upsampleMethod) {
+		return nil
+	}
+
 	for i := 0; i < d.ncomp; i++ {
 		c := &d.comp[i]
 
-		needH := c.width < d.width
-		needV := c.height < d.height
-
-		if needH || needV {
-			cubic := d.upsampleMethod == CatmullRom &&
-				(!needH || c.width >= 3) && (!needV || c.height >= 3)
-
-			if cubic {
+		if c.width < d.width || c.height < d.height {
+			if upsampleCubic(c, d.width, d.height, d.upsampleMethod) {
 				upsampleCatmullRom(c, d.width, d.height)
 			} else {
 				upsampleNearestNeighbor(c, d.width, d.height)

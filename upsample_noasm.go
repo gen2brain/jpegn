@@ -23,17 +23,29 @@ func cf(x int32) byte {
 	return clamp((x + 64) >> 7)
 }
 
-// upsampleCatmullRomScalar performs upsampling by using the 4-tap Catmull-Rom interpolation filter.
-func upsampleCatmullRomScalar(c *component, width, height int) {
+// upsampleCatmullRom doubles c with the 4-tap Catmull-Rom filter until it covers width x height.
+func upsampleCatmullRom(c *component, width, height int) {
 	for c.width < width || c.height < height {
 		if c.width < width {
-			upsampleHScalar(c)
+			upsampleH(c)
 		}
 
 		if c.height < height {
-			upsampleVScalar(c)
+			upsampleV(c)
 		}
 	}
+}
+
+// upsampleH doubles the width of c with the 4-tap Catmull-Rom filter.
+func upsampleH(c *component) { upsampleHWith(c, upsampleHRows) }
+
+// upsampleV doubles the height of c with the 4-tap Catmull-Rom filter.
+func upsampleV(c *component) { upsampleVWith(c, upsampleVRowPair) }
+
+// upsampleCubic reports whether Catmull-Rom applies to c: its edge taps need
+// three samples along each axis it doubles.
+func upsampleCubic(c *component, width, height int, method UpsampleMethod) bool {
+	return method == CatmullRom && (c.width >= width || c.width >= 3) && (c.height >= height || c.height >= 3)
 }
 
 // upsampleHEdges writes the three left and three right boundary samples of a row.
@@ -69,19 +81,12 @@ func upsampleHMiddle(in, out []byte, width, start int) {
 	}
 }
 
-// upsampleHScalar performs a 2x horizontal upsampling on a component's pixel data
-// using a 4-tap Catmull-Rom interpolation filter.
-func upsampleHScalar(c *component) {
+// upsampleHWith doubles the width of c, filtering its rows with rows.
+func upsampleHWith(c *component, rows func(dst, src []byte, w, h, dstStride, srcStride int)) {
 	newWidth := c.width << 1
 	out := make([]byte, newWidth*c.height)
 
-	for y := 0; y < c.height; y++ {
-		in := c.pixels[y*c.stride:]
-		o := out[y*newWidth:]
-
-		upsampleHEdges(in, o, c.width)
-		upsampleHMiddle(in, o, c.width, 0)
-	}
+	rows(out, c.pixels, c.width, c.height, newWidth, c.stride)
 
 	c.width = newWidth
 	c.stride = c.width
@@ -138,9 +143,9 @@ func upsampleVMiddleRowPair(src, out1, out2 []byte, w, stride, start int) {
 	}
 }
 
-// upsampleVScalar performs a 2x vertical upsampling on a component's pixel data
-// using a 4-tap Catmull-Rom filter and symmetric boundary conditions.
-func upsampleVScalar(c *component) {
+// upsampleVWith doubles the height of c with symmetric boundary conditions,
+// filtering interior row pairs with pair.
+func upsampleVWith(c *component, pair func(src, out1, out2 []byte, w, stride int)) {
 	w := c.width
 	stride := c.stride
 	newHeight := c.height << 1
@@ -150,11 +155,7 @@ func upsampleVScalar(c *component) {
 	upsampleVTopEdge(c.pixels, out, w, stride)
 
 	for y := 0; y < c.height-3; y++ {
-		src := c.pixels[y*stride:]
-		out1 := out[(2*y+3)*w:]
-		out2 := out[(2*y+4)*w:]
-
-		upsampleVMiddleRowPair(src, out1, out2, w, stride, 0)
+		pair(c.pixels[y*stride:], out[(2*y+3)*w:], out[(2*y+4)*w:], w, stride)
 	}
 
 	src := c.pixels[(c.height-3)*stride:]
@@ -165,9 +166,13 @@ func upsampleVScalar(c *component) {
 	c.pixels = out
 }
 
-// upsampleNearestNeighborScalar performs upsampling by integer factors using the nearest-neighbor algorithm.
-// This method is fast but produces lower-quality, "blocky" results compared to Catmull-Rom interpolation.
-func upsampleNearestNeighborScalar(c *component, width, height int) {
+// upsampleNearestNeighbor upsamples c by power-of-two factors with sample replication.
+func upsampleNearestNeighbor(c *component, width, height int) {
+	upsampleNearestNeighborWith(c, width, height, upsampleNearestNeighborRows)
+}
+
+// upsampleNearestNeighborWith replicates samples, using rows for the common 2x2 (4:2:0) case.
+func upsampleNearestNeighborWith(c *component, width, height int, rows func(dst, src []byte, w, h, dstStride, srcStride int)) {
 	var xShift, yShift uint
 	tempWidth := c.width
 	tempHeight := c.height
@@ -182,72 +187,55 @@ func upsampleNearestNeighborScalar(c *component, width, height int) {
 		yShift++
 	}
 
-	// If no upsampling is needed, return early.
 	if tempWidth == c.width && tempHeight == c.height {
 		return
 	}
 
-	// Specialized implementation for the common 4:2:0 case (2x2 upsampling).
+	out := make([]byte, tempWidth*tempHeight)
+
 	if xShift == 1 && yShift == 1 {
-		origWidth := c.width
-		origHeight := c.height
-		origStride := c.stride
-		origPixels := c.pixels
+		rows(out, c.pixels, c.width, c.height, tempWidth, c.stride)
+	} else {
+		for y := 0; y < tempHeight; y++ {
+			lin := c.pixels[(y>>yShift)*c.stride:]
+			lout := out[y*tempWidth:]
 
-		c.width = tempWidth
-		c.height = tempHeight
-		c.stride = tempWidth
-
-		out := make([]byte, c.width*c.height)
-		c.pixels = out
-
-		// Optimized 2x2 upsampling (Nearest Neighbor)
-		for y := 0; y < origHeight; y++ {
-			srcRow := origPixels[y*origStride : y*origStride+origWidth]
-			// Calculate destination rows for the current source row (y) and the next one (y+1).
-			dstRow1 := out[2*y*c.stride : (2*y+1)*c.stride]
-			dstRow2 := out[(2*y+1)*c.stride : (2*y+2)*c.stride]
-
-			// 2x horizontal expansion
-			k := 0
-
-			// Ensure bounds checks are eliminated in the inner loop.
-			if origWidth > 0 {
-				_ = srcRow[origWidth-1]
-				// We know dstRow1 has length c.stride (tempWidth), and 2*origWidth <= tempWidth.
-				_ = dstRow1[2*origWidth-1]
+			for x := 0; x < tempWidth; x++ {
+				lout[x] = lin[x>>xShift]
 			}
-
-			for x := 0; x < origWidth; x++ {
-				val := srcRow[x]
-				dstRow1[k] = val
-				dstRow1[k+1] = val
-				k += 2
-			}
-
-			// 2x vertical expansion (copy the expanded row)
-			copy(dstRow2, dstRow1)
 		}
-
-		return
 	}
 
-	// Generic implementation
 	c.width = tempWidth
 	c.height = tempHeight
-
-	out := make([]byte, c.width*c.height)
-	for y := 0; y < c.height; y++ {
-		// Find the source row by right-shifting y
-		lin := c.pixels[(y>>yShift)*c.stride:]
-		lout := out[y*c.width:]
-
-		for x := 0; x < c.width; x++ {
-			// Find the source pixel by right-shifting x
-			lout[x] = lin[x>>xShift]
-		}
-	}
-
-	c.stride = c.width
+	c.stride = tempWidth
 	c.pixels = out
+}
+
+// upsampleHRowsScalar writes the 2x horizontal Catmull-Rom upsampling of h rows.
+func upsampleHRowsScalar(dst, src []byte, w, h, dstStride, srcStride int) {
+	for y := 0; y < h; y++ {
+		in := src[y*srcStride:]
+		o := dst[y*dstStride:]
+
+		upsampleHEdges(in, o, w)
+		upsampleHMiddle(in, o, w, 0)
+	}
+}
+
+// upsampleNearestNeighborRowsScalar writes each of h source rows doubled
+// horizontally into two consecutive destination rows.
+func upsampleNearestNeighborRowsScalar(dst, src []byte, w, h, dstStride, srcStride int) {
+	for y := 0; y < h; y++ {
+		srcRow := src[y*srcStride : y*srcStride+w]
+		dstRow := dst[2*y*dstStride : 2*y*dstStride+2*w]
+
+		for x, val := range srcRow {
+			// A two-byte subslice lets both stores share one bounds check.
+			d := dstRow[2*x : 2*x+2]
+			d[0], d[1] = val, val
+		}
+
+		copy(dst[(2*y+1)*dstStride:], dstRow)
+	}
 }
