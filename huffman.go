@@ -3,10 +3,18 @@ package jpegn
 // huffLUTBits is the look-ahead size of the Huffman fast-path table.
 const huffLUTBits = 8
 
+// fastACBits is the look-ahead size of the fused AC table; nine bits fit most
+// short codes with their magnitude bits.
+const fastACBits = 9
+
 // huffTable is a canonical Huffman decoding table.
 type huffTable struct {
 	// lut maps huffLUTBits of look-ahead to symbol<<8|length; zero means a longer code.
 	lut [1 << huffLUTBits]uint16
+
+	// fastAC maps fastACBits of look-ahead to value<<8|run<<4|(code+magnitude
+	// length), value sign-extended; zero means use getVLC.
+	fastAC [1 << fastACBits]int16
 
 	// For length l in [9,16]: code c is valid if c <= maxcode[l], symbol values[c+delta[l]].
 	maxcode [17]int32
@@ -90,7 +98,25 @@ func buildHuff(t *huffTable, counts *[16]uint8, values []byte) error {
 		return ErrSyntax
 	}
 
+	buildFastAC(t)
+
 	return nil
+}
+
+// buildFastAC derives t.fastAC from t.lut, since only codes of up to eight bits
+// leave room for magnitude bits. The value must fit the entry's upper byte.
+func buildFastAC(t *huffTable) {
+	for i := range t.fastAC {
+		e := t.lut[i>>(fastACBits-huffLUTBits)]
+		l, size := int(e&0xFF), int(e>>8&15)
+
+		t.fastAC[i] = 0
+		if size != 0 && l+size <= fastACBits {
+			if v := signExtend(i>>(fastACBits-l-size)&(1<<size-1), size); v >= -128 && v < 128 {
+				t.fastAC[i] = int16(v<<8 | int(e>>12)<<4 | (l + size))
+			}
+		}
+	}
 }
 
 // huffEncTable maps a symbol to its canonical code and length.
