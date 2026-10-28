@@ -130,7 +130,7 @@ type encComponent struct {
 	height       int
 
 	hf, vf             int
-	coeffs             []int32
+	coeffs             []int16
 	masks              []uint64
 	nBlocksX, nBlocksY int
 	blocksPerLine      int
@@ -166,6 +166,7 @@ type encoder struct {
 	exif          []byte
 	segments      []Segment
 	gather        bool
+	buffered      bool
 	blk           [64]int32
 	zblk          [64]int32
 	rowBuf        []byte
@@ -297,7 +298,10 @@ func (e *encoder) encode(m image.Image, quality int, sub Subsampling, optimize, 
 		return nil
 	}
 
+	e.buffered = optimize
+
 	if optimize {
+		e.buildCoeffs()
 		e.gather = true
 		e.dcFreq = [2][257]int32{}
 		e.acFreq = [2][257]int32{}
@@ -722,9 +726,16 @@ func (e *encoder) scan() {
 	}
 }
 
-// encodeBlock transforms, quantizes and codes the block at (bx, by).
+// encodeBlock transforms, quantizes and codes the block at (bx, by), or codes it from c.coeffs when buffered.
 func (e *encoder) encodeBlock(ci, bx, by int) {
 	c := &e.comp[ci]
+
+	if e.buffered {
+		e.encodeBuffered(c, by*c.nBlocksX+bx)
+
+		return
+	}
+
 	blk := &e.blk
 	zb := &e.zblk
 
@@ -780,6 +791,63 @@ func (e *encoder) encodeCoeffs(zb *[64]int32, c *encComponent, nz uint64) {
 		}
 
 		s, b := magnitude(zb[zz[k]])
+		sym := run<<4 | int(s)
+
+		if e.gather {
+			af[sym]++
+		} else {
+			e.emitPair(t.code[sym], t.size[sym], b, s)
+		}
+
+		prev = k
+	}
+
+	if prev < 63 {
+		if e.gather {
+			af[0]++
+		} else {
+			e.emitBits(t.code[0], t.size[0])
+		}
+	}
+}
+
+// encodeBuffered codes block blk from the zigzag coefficients buildCoeffs kept.
+func (e *encoder) encodeBuffered(c *encComponent, blk int) {
+	coefs := (*[64]int16)(c.coeffs[blk*64:])
+
+	dc := int32(coefs[0])
+	diff := dc - c.pred
+	c.pred = dc
+
+	s, b := magnitude(diff)
+
+	if e.gather {
+		e.dcFreq[c.dcSel][s]++
+	} else {
+		t := &e.dcTab[c.dcSel]
+		e.emitPair(t.code[s], t.size[s], b, s)
+	}
+
+	af := &e.acFreq[c.acSel]
+	t := &e.acTab[c.acSel]
+
+	prev := 0
+
+	for zm := c.masks[blk*maskLevels] &^ 1; zm != 0; zm &= zm - 1 {
+		k := bits.TrailingZeros64(zm)
+
+		run := k - prev - 1
+		for run > 15 {
+			if e.gather {
+				af[0xF0]++
+			} else {
+				e.emitBits(t.code[0xF0], t.size[0xF0])
+			}
+
+			run -= 16
+		}
+
+		s, b := magnitude(int32(coefs[k]))
 		sym := run<<4 | int(s)
 
 		if e.gather {
@@ -900,7 +968,7 @@ func (e *encoder) buildCoeffs() {
 		blocks := c.nBlocksX * c.nBlocksY
 
 		if need := blocks * 64; cap(c.coeffs) < need {
-			c.coeffs = make([]int32, need)
+			c.coeffs = make([]int16, need)
 		} else {
 			c.coeffs = c.coeffs[:need]
 		}
@@ -916,8 +984,6 @@ func (e *encoder) buildCoeffs() {
 
 		for by := 0; by < c.nBlocksY; by++ {
 			for bx := 0; bx < c.nBlocksX; bx++ {
-				off := (by*c.nBlocksX + bx) * 64
-
 				fdct(&e.blk, c.plane[by*8*c.stride+bx*8:], c.stride)
 
 				nz := quantizeBlock(&e.zblk, &e.blk, recip, half)
@@ -925,16 +991,31 @@ func (e *encoder) buildCoeffs() {
 					nz = e.applyDeadZone(&e.zblk, &e.blk, nz, ci, e.aqStrength(ci, bx, by))
 				}
 
-				dst := c.coeffs[off : off+64 : off+64]
-				clear(dst)
+				blk := by*c.nBlocksX + bx
+				dst := (*[64]int16)(c.coeffs[blk*64:])
+
+				dst[0] = int16(e.zblk[0])
 
 				var m0, m1, m2, m3 uint64
+
+				if !e.progressive {
+					for t := nz; t != 0; t &= t - 1 {
+						n := bits.TrailingZeros64(t)
+						k := invZz[n]
+						dst[k&63] = int16(e.zblk[n])
+						m0 |= 1 << k
+					}
+
+					c.masks[blk*maskLevels] = m0
+
+					continue
+				}
 
 				for t := nz; t != 0; t &= t - 1 {
 					n := bits.TrailingZeros64(t)
 					v := e.zblk[n]
 					k := invZz[n]
-					dst[k] = v
+					dst[k&63] = int16(v)
 
 					if v < 0 {
 						v = -v
@@ -956,7 +1037,7 @@ func (e *encoder) buildCoeffs() {
 					}
 				}
 
-				m := c.masks[off/64*maskLevels:]
+				m := c.masks[blk*maskLevels:]
 				m[0], m[1], m[2], m[3] = m0, m1, m2, m3
 			}
 		}
@@ -1172,7 +1253,7 @@ func (e *encoder) emitCorr(n int) {
 
 // encodeDCFirst codes the DC difference of one block.
 func (e *encoder) encodeDCFirst(c *encComponent, blk int) {
-	v := c.coeffs[blk*64]
+	v := int32(c.coeffs[blk*64])
 	diff := v - c.pred
 	c.pred = v
 
@@ -1227,7 +1308,7 @@ func (e *encoder) encodeACFirst(c *encComponent, blk int, s *progScan) {
 			run -= 16
 		}
 
-		n, b := magnitude(pointTransform(coefs[k], al))
+		n, b := magnitude(pointTransform(int32(coefs[k]), al))
 		e.putAC(sel, run<<4|int(n), b, n)
 	}
 
@@ -1277,7 +1358,7 @@ func (e *encoder) encodeACRefine(c *encComponent, blk int, s *progScan) {
 			start = 0
 		}
 
-		v := coefs[k]
+		v := int32(coefs[k])
 
 		if big&(1<<uint(k)) != 0 {
 			m := v >> 31

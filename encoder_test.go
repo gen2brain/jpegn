@@ -234,6 +234,51 @@ func TestEncodeOptimizeCoding(t *testing.T) {
 	}
 }
 
+// TestEncodeReusedCoeffs expects an encoder reused after a noisy image to match a fresh one.
+func TestEncodeReusedCoeffs(t *testing.T) {
+	const w, h = 67, 45
+
+	rng := rand.New(rand.NewSource(3))
+
+	noise := image.NewRGBA(image.Rect(0, 0, w, h))
+	rng.Read(noise.Pix)
+
+	gray := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(gray, gray.Rect, image.NewUniform(color.Gray{128}), image.Point{}, draw.Src)
+
+	mixed := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(mixed, mixed.Rect, gray, image.Point{}, draw.Src)
+	draw.Draw(mixed, image.Rect(0, 0, w/2, h), noise, image.Point{}, draw.Src)
+
+	for _, prog := range []bool{false, true} {
+		for _, sub := range []Subsampling{Subsample420, Subsample444} {
+			for _, adaptive := range []bool{false, true} {
+				for _, rst := range []int{0, 3} {
+					for name, m := range map[string]image.Image{"gray": gray, "mixed": mixed} {
+						var fresh, reused encoder
+
+						if err := fresh.encode(m, 90, sub, true, prog, adaptive, rst); err != nil {
+							t.Fatal(err)
+						}
+
+						if err := reused.encode(noise, 90, sub, true, prog, adaptive, rst); err != nil {
+							t.Fatal(err)
+						}
+
+						if err := reused.encode(m, 90, sub, true, prog, adaptive, rst); err != nil {
+							t.Fatal(err)
+						}
+
+						if !bytes.Equal(fresh.out, reused.out) {
+							t.Errorf("%s prog=%v sub=%d adaptive=%v rst=%d: reused encoder output differs", name, prog, sub, adaptive, rst)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestEncodeRestartInterval(t *testing.T) {
 	src := synthImage(96, 64)
 
