@@ -10,140 +10,64 @@ func upsampleNearestNeighborAVX2(src, dst unsafe.Pointer, srcW, srcH, srcS, dstS
 //go:noescape
 func upsampleNearestNeighborSSE(src, dst unsafe.Pointer, srcW, srcH, srcS, dstS int)
 
-// upsampleNearestNeighbor uses SIMD for the common 2x2 case, otherwise falls back to Go.
-func upsampleNearestNeighbor(c *component, width, height int) {
-	var xShift, yShift uint
-	tempWidth := c.width
-	tempHeight := c.height
-
-	for tempWidth < width {
-		tempWidth <<= 1
-		xShift++
-	}
-
-	for tempHeight < height {
-		tempHeight <<= 1
-		yShift++
-	}
-
-	if tempWidth == c.width && tempHeight == c.height {
-		return
-	}
-
-	// Use the SIMD path for the common 2x2 (4:2:0) case.
-	if (hasAVX2 || hasSSE4) && xShift == 1 && yShift == 1 {
-		origPixels := c.pixels
-		origStride := c.stride
-		origWidth := c.width
-		origHeight := c.height
-
-		if origWidth <= 0 || origHeight <= 0 || len(origPixels) == 0 {
-			upsampleNearestNeighborScalar(c, width, height)
-
-			return
-		}
-
-		out := make([]byte, tempWidth*tempHeight)
-
-		c.pixels = out
-		c.width = tempWidth
-		c.height = tempHeight
-		c.stride = tempWidth
-
-		if hasAVX2 {
-			upsampleNearestNeighborAVX2(unsafe.Pointer(&origPixels[0]), unsafe.Pointer(&out[0]), origWidth, origHeight, origStride, c.stride)
-
-			return
-		}
-
-		upsampleNearestNeighborSSE(unsafe.Pointer(&origPixels[0]), unsafe.Pointer(&out[0]), origWidth, origHeight, origStride, c.stride)
-
-		return
-	}
-
-	upsampleNearestNeighborScalar(c, width, height)
-}
-
 //go:noescape
 func upsampleHAVX2(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)
-
-//go:noescape
-func upsampleVAVX2(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)
 
 //go:noescape
 func upsampleHSSE(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)
 
 //go:noescape
-func upsampleVSSE(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)
+func upsampleVMiddleAVX2(dst1, dst2, src unsafe.Pointer, stride, n int)
 
-// upsampleCatmullRom dispatches to the SIMD horizontal and vertical resampling
-// functions if available, otherwise falls back to the generic Go implementation.
-func upsampleCatmullRom(c *component, width, height int) {
-	for c.width < width || c.height < height {
-		if c.width < width {
-			upsampleH(c)
-		}
+//go:noescape
+func upsampleVMiddleSSE(dst1, dst2, src unsafe.Pointer, stride, n int)
 
-		if c.height < height {
-			upsampleV(c)
-		}
-	}
-}
-
-// upsampleHRun doubles the width in place with kernel.
-func upsampleHRun(c *component, kernel func(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)) {
-	newWidth := c.width << 1
-	out := make([]byte, newWidth*c.height)
-
-	kernel(unsafe.Pointer(&out[0]), unsafe.Pointer(&c.pixels[0]), c.width, c.height, newWidth, c.stride)
-
-	c.width = newWidth
-	c.stride = newWidth
-	c.pixels = out
-}
-
-// upsampleVRun doubles the height in place with kernel.
-func upsampleVRun(c *component, kernel func(dst, src unsafe.Pointer, w, h, dstStride, srcStride int)) {
-	newHeight := c.height << 1
-	out := make([]byte, c.width*newHeight)
-
-	kernel(unsafe.Pointer(&out[0]), unsafe.Pointer(&c.pixels[0]), c.width, c.height, c.width, c.stride)
-
-	c.height = newHeight
-	c.stride = c.width
-	c.pixels = out
-}
-
-// upsampleH needs 3 edge pixels plus one full vector block for the main loop to run.
-func upsampleH(c *component) {
+// upsampleHRows writes the 2x horizontal Catmull-Rom upsampling of h rows. The
+// kernels need 3 edge samples plus one full vector block.
+func upsampleHRows(dst, src []byte, w, h, dstStride, srcStride int) {
 	switch {
-	case hasAVX2 && c.width >= 19:
-		upsampleHRun(c, upsampleHAVX2)
+	case hasAVX2 && w >= 19:
+		upsampleHAVX2(unsafe.Pointer(&dst[0]), unsafe.Pointer(&src[0]), w, h, dstStride, srcStride)
 
 		return
-	case hasSSE4 && c.width >= 11:
-		upsampleHRun(c, upsampleHSSE)
+	case hasSSE4 && w >= 11:
+		upsampleHSSE(unsafe.Pointer(&dst[0]), unsafe.Pointer(&src[0]), w, h, dstStride, srcStride)
 
 		return
 	}
 
-	upsampleHScalar(c)
+	upsampleHRowsScalar(dst, src, w, h, dstStride, srcStride)
 }
 
-// upsampleV needs one full vector block across and enough rows for the main loop.
-func upsampleV(c *component) {
-	if c.height >= 16 {
-		switch {
-		case hasAVX2 && c.width >= 16:
-			upsampleVRun(c, upsampleVAVX2)
+// upsampleVRowPair writes one interior output row pair from the four source rows at src.
+func upsampleVRowPair(src, out1, out2 []byte, w, stride int) {
+	nbulk := 0
 
-			return
-		case hasSSE4 && c.width >= 8:
-			upsampleVRun(c, upsampleVSSE)
-
-			return
-		}
+	switch {
+	case hasAVX2 && w >= 16:
+		nbulk = w &^ 15
+		upsampleVMiddleAVX2(unsafe.Pointer(&out1[0]), unsafe.Pointer(&out2[0]), unsafe.Pointer(&src[0]), stride, nbulk)
+	case hasSSE4 && w >= 8:
+		nbulk = w &^ 7
+		upsampleVMiddleSSE(unsafe.Pointer(&out1[0]), unsafe.Pointer(&out2[0]), unsafe.Pointer(&src[0]), stride, nbulk)
 	}
 
-	upsampleVScalar(c)
+	upsampleVMiddleRowPair(src, out1, out2, w, stride, nbulk)
+}
+
+// upsampleNearestNeighborRows writes each of h source rows doubled horizontally
+// into two consecutive destination rows.
+func upsampleNearestNeighborRows(dst, src []byte, w, h, dstStride, srcStride int) {
+	switch {
+	case hasAVX2:
+		upsampleNearestNeighborAVX2(unsafe.Pointer(&src[0]), unsafe.Pointer(&dst[0]), w, h, srcStride, dstStride)
+
+		return
+	case hasSSE4:
+		upsampleNearestNeighborSSE(unsafe.Pointer(&src[0]), unsafe.Pointer(&dst[0]), w, h, srcStride, dstStride)
+
+		return
+	}
+
+	upsampleNearestNeighborRowsScalar(dst, src, w, h, dstStride, srcStride)
 }

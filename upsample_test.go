@@ -53,7 +53,7 @@ func testUpsampleCatmullRomAssembly(t *testing.T) {
 			want := cloneComponent(got)
 
 			upsampleH(got)
-			upsampleHScalar(want)
+			upsampleHWith(want, upsampleHRowsScalar)
 
 			if got.width != want.width || got.stride != want.stride || got.height != want.height {
 				t.Fatalf("dim mismatch: got %dx%d stride %d, want %dx%d stride %d", got.width, got.height, got.stride, want.width, want.height, want.stride)
@@ -66,7 +66,9 @@ func testUpsampleCatmullRomAssembly(t *testing.T) {
 			want := cloneComponent(got)
 
 			upsampleV(got)
-			upsampleVScalar(want)
+			upsampleVWith(want, func(src, out1, out2 []byte, w, stride int) {
+				upsampleVMiddleRowPair(src, out1, out2, w, stride, 0)
+			})
 
 			if got.width != want.width || got.stride != want.stride || got.height != want.height {
 				t.Fatalf("dim mismatch: got %dx%d stride %d, want %dx%d stride %d", got.width, got.height, got.stride, want.width, want.height, want.stride)
@@ -283,7 +285,7 @@ func testUpsampleNearestNeighborAssembly(t *testing.T) {
 
 			// Run both the assembly-optimized and generic versions.
 			upsampleNearestNeighbor(cAsm, targetW, targetH)
-			upsampleNearestNeighborScalar(cGeneric, targetW, targetH)
+			upsampleNearestNeighborWith(cGeneric, targetW, targetH, upsampleNearestNeighborRowsScalar)
 
 			// The results must be identical.
 			if cAsm.width != cGeneric.width || cAsm.height != cGeneric.height {
