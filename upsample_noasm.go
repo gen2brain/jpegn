@@ -37,13 +37,16 @@ func upsampleCatmullRom(c *component, width, height int) {
 }
 
 // upsampleH doubles the width of c with the 4-tap Catmull-Rom filter.
-func upsampleH(c *component) { upsampleHWith(c, upsampleHRows) }
+func upsampleH(c *component) {
+	upsampleHWith(c, upsampleHRows)
+}
 
 // upsampleV doubles the height of c with the 4-tap Catmull-Rom filter.
-func upsampleV(c *component) { upsampleVWith(c, upsampleVRowPair) }
+func upsampleV(c *component) {
+	upsampleVWith(c, upsampleVRowPair)
+}
 
-// upsampleCubic reports whether Catmull-Rom applies to c: its edge taps need
-// three samples along each axis it doubles.
+// upsampleCubic reports whether Catmull-Rom applies to c.
 func upsampleCubic(c *component, width, height int, method UpsampleMethod) bool {
 	return method == CatmullRom && (c.width >= width || c.width >= 3) && (c.height >= height || c.height >= 3)
 }
@@ -143,8 +146,7 @@ func upsampleVMiddleRowPair(src, out1, out2 []byte, w, stride, start int) {
 	}
 }
 
-// upsampleVWith doubles the height of c with symmetric boundary conditions,
-// filtering interior row pairs with pair.
+// upsampleVWith doubles the height of c, filtering interior row pairs with pair.
 func upsampleVWith(c *component, pair func(src, out1, out2 []byte, w, stride int)) {
 	w := c.width
 	stride := c.stride
@@ -223,15 +225,13 @@ func upsampleHRowsScalar(dst, src []byte, w, h, dstStride, srcStride int) {
 	}
 }
 
-// upsampleNearestNeighborRowsScalar writes each of h source rows doubled
-// horizontally into two consecutive destination rows.
+// upsampleNearestNeighborRowsScalar writes each of h source rows doubled horizontally into two destination rows.
 func upsampleNearestNeighborRowsScalar(dst, src []byte, w, h, dstStride, srcStride int) {
 	for y := 0; y < h; y++ {
 		srcRow := src[y*srcStride : y*srcStride+w]
 		dstRow := dst[2*y*dstStride : 2*y*dstStride+2*w]
 
 		for x, val := range srcRow {
-			// A two-byte subslice lets both stores share one bounds check.
 			d := dstRow[2*x : 2*x+2]
 			d[0], d[1] = val, val
 		}

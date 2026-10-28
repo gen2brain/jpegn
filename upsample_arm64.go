@@ -47,8 +47,7 @@ func upsampleVRowPair(src, out1, out2 []byte, w, stride int) {
 	upsampleVMiddleRowPair(src, out1, out2, w, stride, nbulk)
 }
 
-// upsampleNearestNeighborRows writes each of h source rows doubled horizontally
-// into two consecutive destination rows.
+// upsampleNearestNeighborRows writes each of h source rows doubled horizontally into two destination rows.
 func upsampleNearestNeighborRows(dst, src []byte, w, h, dstStride, srcStride int) {
 	upsampleNearestNeighborNEON(unsafe.Pointer(&src[0]), unsafe.Pointer(&dst[0]), w, h, srcStride, dstStride)
 }

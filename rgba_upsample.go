@@ -1,15 +1,9 @@
 package jpegn
 
-// upsampleStripRows is the number of chroma source rows upsampled per strip. It
-// keeps the strip buffers cache-resident between upsampling and conversion while
-// amortizing the per-call and Catmull-Rom carry-over cost.
+// upsampleStripRows is the number of chroma source rows upsampled per strip.
 const upsampleStripRows = 16
 
-// yCbCrToRGBAUpsampled converts YCbCr with 2x horizontally (4:2:2) or 2x2 (4:2:0)
-// subsampled chroma to RGBA, upsampling chroma strip by strip right before
-// converting it instead of materializing full-resolution chroma planes. The output
-// equals upsampleCatmullRom/upsampleNearestNeighbor followed by yCbCrToRGBA. It
-// reports false, without writing, when the layout is not one it handles.
+// yCbCrToRGBAUpsampled converts 4:2:2 or 4:2:0 YCbCr to RGBA, upsampling chroma per strip; false means the layout is not handled.
 func yCbCrToRGBAUpsampled(y, cb, cr *component, dst []byte, width, height int, method UpsampleMethod) bool {
 	if width <= 0 || height <= 0 || len(dst) < width*height*4 {
 		return false
@@ -37,15 +31,13 @@ func yCbCrToRGBAUpsampled(y, cb, cr *component, dst []byte, width, height int, m
 	case needV:
 		yCbCrToRGBARowStrips(y, cb, cr, dst, width, height, w2, 2, upsampleNearestNeighborRows)
 	default:
-		// Nearest-neighbour rows come out doubled, so 4:2:2 reads every other one.
 		yCbCrToRGBARowStrips(y, cb, cr, dst, width, height, 2*w2, 1, upsampleNearestNeighborRows)
 	}
 
 	return true
 }
 
-// yCbCrToRGBAStrip converts output rows [r0, r1) with chroma rows taken from
-// cbRows/crRows at cStride.
+// yCbCrToRGBAStrip converts output rows [r0, r1) with chroma rows at cStride.
 func yCbCrToRGBAStrip(y *component, cbRows, crRows []byte, cStride int, dst []byte, width, r0, r1 int) {
 	ys := component{pixels: y.pixels[r0*y.stride:], stride: y.stride}
 	cbs := component{pixels: cbRows, stride: cStride}
@@ -54,8 +46,7 @@ func yCbCrToRGBAStrip(y *component, cbRows, crRows []byte, cStride int, dst []by
 	yCbCrToRGBA(&ys, &cbs, &crs, dst[r0*width*4:r1*width*4], width, r1-r0)
 }
 
-// yCbCrToRGBARowStrips upsamples strips of chroma rows with rows into buffers
-// read back at cStride, each source row covering vScale output rows.
+// yCbCrToRGBARowStrips upsamples chroma with rows, each source row covering vScale output rows.
 func yCbCrToRGBARowStrips(y, cb, cr *component, dst []byte, width, height, cStride, vScale int, rows func(dst, src []byte, w, h, dstStride, srcStride int)) {
 	w2 := cb.width << 1
 	stripSize := upsampleStripRows * vScale * cStride
@@ -72,18 +63,14 @@ func yCbCrToRGBARowStrips(y, cb, cr *component, dst []byte, width, height, cStri
 	}
 }
 
-// catmullRomStrip holds one chroma component's horizontally interpolated source
-// rows and the vertically interpolated output rows of the current strip.
+// catmullRomStrip holds the interpolated rows of one chroma component for the current strip.
 type catmullRomStrip struct {
 	c     *component
-	hRows []byte // source rows [y0, y1+3) after horizontal interpolation
-	vRows []byte // output rows [r0, r1)
+	hRows []byte
+	vRows []byte
 }
 
-// fill interpolates the strip covering interior row pairs [y0, y1), plus the top
-// edge when y0 is 0 and the bottom edge when y1 is the last pair, and returns the
-// number of output rows written. The first carry rows of hRows already hold
-// source rows y0..y0+carry-1.
+// fill interpolates interior row pairs [y0, y1) and any image edge, returning the output row count.
 func (s *catmullRomStrip) fill(y0, y1, carry, pairs int) int {
 	c := s.c
 	w2 := c.width << 1
@@ -110,9 +97,7 @@ func (s *catmullRomStrip) fill(y0, y1, carry, pairs int) int {
 	return n
 }
 
-// yCbCrToRGBACatmullRom420 interpolates chroma horizontally then vertically per
-// strip. The vertical filter spans four source rows, so the last three
-// horizontally interpolated rows of a strip carry over to the next.
+// yCbCrToRGBACatmullRom420 converts 4:2:0 YCbCr to RGBA with Catmull-Rom chroma, strip by strip.
 func yCbCrToRGBACatmullRom420(y, cb, cr *component, dst []byte, width, height int) {
 	w2 := cb.width << 1
 	pairs := cb.height - 3

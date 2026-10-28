@@ -22,8 +22,7 @@ func upsampleVMiddleAVX2(dst1, dst2, src unsafe.Pointer, stride, n int)
 //go:noescape
 func upsampleVMiddleSSE(dst1, dst2, src unsafe.Pointer, stride, n int)
 
-// upsampleHRows writes the 2x horizontal Catmull-Rom upsampling of h rows. The
-// kernels need 3 edge samples plus one full vector block.
+// upsampleHRows writes the 2x horizontal Catmull-Rom upsampling of h rows.
 func upsampleHRows(dst, src []byte, w, h, dstStride, srcStride int) {
 	switch {
 	case hasAVX2 && w >= 19:
@@ -55,8 +54,7 @@ func upsampleVRowPair(src, out1, out2 []byte, w, stride int) {
 	upsampleVMiddleRowPair(src, out1, out2, w, stride, nbulk)
 }
 
-// upsampleNearestNeighborRows writes each of h source rows doubled horizontally
-// into two consecutive destination rows.
+// upsampleNearestNeighborRows writes each of h source rows doubled horizontally into two destination rows.
 func upsampleNearestNeighborRows(dst, src []byte, w, h, dstStride, srcStride int) {
 	switch {
 	case hasAVX2:

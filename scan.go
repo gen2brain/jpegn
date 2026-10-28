@@ -85,12 +85,10 @@ func (d *decoder) decodeBlock(c *component, outOffset int) {
 	// Decode AC coefficients.
 	coef := 1 // coef is the zigzag index.
 	for coef <= 63 {
-		// Refill as getVLC does, so both paths see the same bits.
 		if d.bufBits < 16 && !d.markerHit {
 			d.showBits(16)
 		}
 
-		// The fused entry is used only when all its bits are buffered data.
 		var e int16
 		if d.bufBits >= fastACBits {
 			e = acHuff.fastAC[(d.buf>>uint(d.bufBits-fastACBits))&(1<<fastACBits-1)]

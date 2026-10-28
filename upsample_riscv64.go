@@ -36,8 +36,7 @@ func upsampleVRowPair(src, out1, out2 []byte, w, stride int) {
 	upsampleVMiddleRVV(&out1[0], &out2[0], &src[0], stride, w)
 }
 
-// upsampleNearestNeighborRows writes each of h source rows doubled horizontally
-// into two consecutive destination rows.
+// upsampleNearestNeighborRows writes each of h source rows doubled horizontally into two destination rows.
 func upsampleNearestNeighborRows(dst, src []byte, w, h, dstStride, srcStride int) {
 	upsampleNearestNeighborRowsScalar(dst, src, w, h, dstStride, srcStride)
 }

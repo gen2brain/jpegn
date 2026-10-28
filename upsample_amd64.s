@@ -625,7 +625,7 @@ sse_done_row_h:
 	RET
 
 // func upsampleVMiddleAVX2(dst1, dst2, src unsafe.Pointer, stride, n int)
-// Writes n samples (a multiple of 16) to each output row; p0..p3 = rows src+k*stride.
+// Writes n samples, a multiple of 16, to each of the two output rows.
 TEXT ·upsampleVMiddleAVX2(SB), NOSPLIT, $0-40
 	MOVQ dst1+0(FP), R8
 	MOVQ dst2+8(FP), R9
@@ -688,7 +688,7 @@ vmid_avx2_done:
 	RET
 
 // func upsampleVMiddleSSE(dst1, dst2, src unsafe.Pointer, stride, n int)
-// Writes n samples (a multiple of 8) to each output row; p0..p3 = rows src+k*stride.
+// Writes n samples, a multiple of 8, to each of the two output rows.
 TEXT ·upsampleVMiddleSSE(SB), NOSPLIT, $0-40
 	MOVQ dst1+0(FP), R8
 	MOVQ dst2+8(FP), R9

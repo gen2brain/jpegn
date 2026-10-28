@@ -421,8 +421,7 @@ func testYCbCrToRGBAExhaustive(t *testing.T) {
 	}
 }
 
-// TestYCbCrToRGBAUpsampled compares the strip-fused upsampling conversion against
-// whole-plane upsampling followed by conversion, across strip and edge boundaries.
+// TestYCbCrToRGBAUpsampled compares strip upsampling against whole-plane upsampling then conversion.
 func TestYCbCrToRGBAUpsampled(t *testing.T) {
 	eachTier(t, testYCbCrToRGBAUpsampled)
 }

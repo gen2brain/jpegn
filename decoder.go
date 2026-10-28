@@ -1117,8 +1117,6 @@ func (d *decoder) decodeDRI() error {
 
 // convert handles upsampling of chroma components (if needed) and converts the final YCbCr/RGB pixel data to RGBA format.
 func (d *decoder) convert() error {
-	// Upsampling chroma per strip during conversion keeps it cache-resident and
-	// avoids allocating full-resolution chroma planes.
 	if d.ncomp == 3 && !d.isRGB &&
 		yCbCrToRGBAUpsampled(&d.comp[0], &d.comp[1], &d.comp[2], d.pixels, d.width, d.height, d.upsampleMethod) {
 		return nil
@@ -1167,16 +1165,14 @@ func (d *decoder) transform() {
 	d.pixels, d.width, d.height = orientRGBA(d.pixels, d.width, d.height, d.orientation)
 }
 
-// orientTile is the tile edge in pixels; 32x32 RGBA tiles keep the scattered
-// destination rows cache resident.
+// orientTile is the tile edge in pixels.
 const orientTile = 32
 
 // orientRGBA applies an EXIF orientation to a tightly packed w*h RGBA buffer.
-// Pixels move as uint32 since only the 4 bytes are relocated, so byte order is irrelevant.
 func orientRGBA(src []byte, w, h, orientation int) ([]byte, int, int) {
 	le := binary.LittleEndian
 
-	if orientation == 3 { // Rotate 180 reverses the pixel order, so it runs in place.
+	if orientation == 3 {
 		for i, j := 0, len(src)-4; i < j; i, j = i+4, j-4 {
 			a, b := le.Uint32(src[i:]), le.Uint32(src[j:])
 			le.PutUint32(src[i:], b)
@@ -1186,8 +1182,8 @@ func orientRGBA(src []byte, w, h, orientation int) ([]byte, int, int) {
 		return src, w, h
 	}
 
-	// Source pixel (sx, sy) lands at pixel index base + sx*stepX + sy*stepY in dst.
 	var base, stepX, stepY int
+
 	switch orientation {
 	case 2: // Flip horizontal
 		base, stepX, stepY = w-1, -1, w
@@ -1204,16 +1200,21 @@ func orientRGBA(src []byte, w, h, orientation int) ([]byte, int, int) {
 	default:
 		return src, w, h
 	}
+
 	base, stepX, stepY = base*4, stepX*4, stepY*4
 
 	dst := make([]byte, len(src))
+
 	for ty := 0; ty < h; ty += orientTile {
 		yEnd := min(ty+orientTile, h)
+
 		for tx := 0; tx < w; tx += orientTile {
 			xEnd := min(tx+orientTile, w)
+
 			for sy := ty; sy < yEnd; sy++ {
 				row := src[(sy*w+tx)*4 : (sy*w+xEnd)*4]
 				o := base + sy*stepY + tx*stepX
+
 				for i := 0; i < len(row); i += 4 {
 					le.PutUint32(dst[o:], le.Uint32(row[i:]))
 					o += stepX
