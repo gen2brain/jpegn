@@ -3,6 +3,7 @@ package jpegn
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"image"
 	"io"
@@ -1162,59 +1163,69 @@ func (d *decoder) rgbOutput() bool {
 
 // transform applies rotation and flipping to the decoded RGBA image based on the EXIF orientation tag.
 func (d *decoder) transform() {
-	srcWidth, srcHeight := d.width, d.height
-	src := d.pixels
-	srcStride := srcWidth * 4
+	d.pixels, d.width, d.height = orientRGBA(d.pixels, d.width, d.height, d.orientation)
+}
 
-	dstWidth, dstHeight := srcWidth, srcHeight
+// orientTile is the tile edge in pixels; 32x32 RGBA tiles keep the scattered
+// destination rows cache resident.
+const orientTile = 32
 
-	// Orientations 5-8 involve 90/270 degree rotations, swapping width and height.
-	if d.orientation >= 5 {
-		dstWidth, dstHeight = srcHeight, srcWidth
+// orientRGBA applies an EXIF orientation to a tightly packed w*h RGBA buffer.
+// Pixels move as uint32 since only the 4 bytes are relocated, so byte order is irrelevant.
+func orientRGBA(src []byte, w, h, orientation int) ([]byte, int, int) {
+	le := binary.LittleEndian
+
+	if orientation == 3 { // Rotate 180 reverses the pixel order, so it runs in place.
+		for i, j := 0, len(src)-4; i < j; i, j = i+4, j-4 {
+			a, b := le.Uint32(src[i:]), le.Uint32(src[j:])
+			le.PutUint32(src[i:], b)
+			le.PutUint32(src[j:], a)
+		}
+
+		return src, w, h
 	}
 
-	// Rotations need a separate buffer when W != H, so always allocate one.
-	dst := make([]byte, dstWidth*dstHeight*4)
-	dstStride := dstWidth * 4
+	// Source pixel (sx, sy) lands at pixel index base + sx*stepX + sy*stepY in dst.
+	var base, stepX, stepY int
+	switch orientation {
+	case 2: // Flip horizontal
+		base, stepX, stepY = w-1, -1, w
+	case 4: // Flip vertical
+		base, stepX, stepY = (h-1)*w, 1, -w
+	case 5: // Transpose (Flip along TL-BR diagonal)
+		base, stepX, stepY = 0, h, 1
+	case 6: // Rotate 90 CW
+		base, stepX, stepY = h-1, h, -1
+	case 7: // Transverse (Flip along TR-BL diagonal)
+		base, stepX, stepY = w*h-1, -h, -1
+	case 8: // Rotate 270 CW (90 CCW)
+		base, stepX, stepY = (w-1)*h, -h, 1
+	default:
+		return src, w, h
+	}
+	base, stepX, stepY = base*4, stepX*4, stepY*4
 
-	// Iterate over the source image dimensions (forward mapping).
-	for sy := 0; sy < srcHeight; sy++ {
-		for sx := 0; sx < srcWidth; sx++ {
-			var dx, dy int
-
-			// Map source coordinates (sx, sy) to destination coordinates (dx, dy).
-			switch d.orientation {
-			case 2: // Flip horizontal
-				dx, dy = srcWidth-1-sx, sy
-			case 3: // Rotate 180
-				dx, dy = srcWidth-1-sx, srcHeight-1-sy
-			case 4: // Flip vertical
-				dx, dy = sx, srcHeight-1-sy
-			case 5: // Transpose (Flip along TL-BR diagonal)
-				dx, dy = sy, sx
-			case 6: // Rotate 90 CW
-				dx, dy = srcHeight-1-sy, sx
-			case 7: // Transverse (Flip along TR-BL diagonal)
-				dx, dy = srcHeight-1-sy, srcWidth-1-sx
-			case 8: // Rotate 270 CW (90 CCW)
-				dx, dy = sy, srcWidth-1-sx
-			default:
-				// Should not happen as we check orientation > 1 before calling transform.
-				continue
+	dst := make([]byte, len(src))
+	for ty := 0; ty < h; ty += orientTile {
+		yEnd := min(ty+orientTile, h)
+		for tx := 0; tx < w; tx += orientTile {
+			xEnd := min(tx+orientTile, w)
+			for sy := ty; sy < yEnd; sy++ {
+				row := src[(sy*w+tx)*4 : (sy*w+xEnd)*4]
+				o := base + sy*stepY + tx*stepX
+				for i := 0; i < len(row); i += 4 {
+					le.PutUint32(dst[o:], le.Uint32(row[i:]))
+					o += stepX
+				}
 			}
-
-			srcOffset := sy*srcStride + sx*4
-			dstOffset := dy*dstStride + dx*4
-
-			// Copy RGBA pixel (4 bytes).
-			copy(dst[dstOffset:dstOffset+4], src[srcOffset:srcOffset+4])
 		}
 	}
 
-	// Update decoder state with the transformed image.
-	d.pixels = dst
-	d.width = dstWidth
-	d.height = dstHeight
+	if orientation >= 5 {
+		return dst, h, w
+	}
+
+	return dst, w, h
 }
 
 // decode reads the JPEG stream from a byte slice, parses all segments, decodes the scan data, and performs color conversion.
